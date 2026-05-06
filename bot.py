@@ -25904,11 +25904,20 @@ def _ensure_tier_fire_alerts_schema(db_path: str | None = None) -> None:
             row[1]
             for row in _tfas_conn.execute("PRAGMA table_info(edge_results)").fetchall()
         }
+        _changed = False
         if "posted_to_alerts_direct_claimed_at" not in _cols:
             _tfas_conn.execute(
                 "ALTER TABLE edge_results "
                 "ADD COLUMN posted_to_alerts_direct_claimed_at DATETIME"
             )
+            _changed = True
+        if "posted_to_alerts_direct_claim_id" not in _cols:
+            _tfas_conn.execute(
+                "ALTER TABLE edge_results "
+                "ADD COLUMN posted_to_alerts_direct_claim_id TEXT"
+            )
+            _changed = True
+        if _changed:
             _tfas_conn.commit()
     finally:
         _tfas_conn.close()
@@ -25982,11 +25991,14 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not _tfa_edge_id or not _tfa_mk:
             continue
 
+        import uuid as _tfa_uuid
+        _tfa_claim_id = _tfa_uuid.uuid4().hex
         try:
             _tfa_claimed = _db_write_retry(
                 "UPDATE edge_results "
                 "SET posted_to_alerts_direct = -1, "
-                "posted_to_alerts_direct_claimed_at = datetime('now') "
+                "posted_to_alerts_direct_claimed_at = datetime('now'), "
+                "posted_to_alerts_direct_claim_id = ? "
                 "WHERE edge_id = ? "
                 "AND result IS NULL "
                 "AND edge_tier = ? "
@@ -26003,6 +26015,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "  )"
                 ")",
                 (
+                    _tfa_claim_id,
                     _tfa_edge_id,
                     _tfa_tier,
                     _tfa_row.get("recommended_at") or "",
@@ -26077,8 +26090,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 0 "
                     ", posted_to_alerts_direct_claimed_at = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
-                    (_tfa_edge_id,),
+                    ", posted_to_alerts_direct_claim_id = NULL "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "AND posted_to_alerts_direct_claim_id = ?",
+                    (_tfa_edge_id, _tfa_claim_id),
                     retries=5,
                     backoff_ms=200,
                 )
@@ -26102,8 +26117,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _tfa_marked = _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 1 "
                     ", posted_to_alerts_direct_claimed_at = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
-                    (_tfa_edge_id,),
+                    ", posted_to_alerts_direct_claim_id = NULL "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "AND posted_to_alerts_direct_claim_id = ?",
+                    (_tfa_edge_id, _tfa_claim_id),
                     retries=10,
                     backoff_ms=500,
                 )
@@ -26125,8 +26142,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 0 "
                     ", posted_to_alerts_direct_claimed_at = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
-                    (_tfa_edge_id,),
+                    ", posted_to_alerts_direct_claim_id = NULL "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "AND posted_to_alerts_direct_claim_id = ?",
+                    (_tfa_edge_id, _tfa_claim_id),
                     retries=5,
                     backoff_ms=200,
                 )

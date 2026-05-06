@@ -139,16 +139,20 @@ def _ensure_alerts_send_log_schema(conn) -> None:
     )
 
 
-def _reserve_send_sync(edge_id: str, match_key: str, tier: str) -> tuple[bool, str | None]:
-    """Atomically reserve an Alerts send; return (acquired, existing_url)."""
+def _reserve_send_sync(
+    edge_id: str,
+    match_key: str,
+    tier: str,
+) -> tuple[bool, str | None, int | None]:
+    """Atomically reserve an Alerts send; return (acquired, existing_url, row id)."""
     if not edge_id:
-        return False, None
+        return False, None, None
     db_path = _alerts_db_path()
     try:
         from scrapers.db_connect import connect_odds_db  # type: ignore[import]
     except ImportError as exc:
         log.warning("alerts_direct: _reserve_send_sync import error: %s", exc)
-        return False, None
+        return False, None, None
     conn = None
     try:
         conn = connect_odds_db(db_path)
@@ -167,8 +171,9 @@ def _reserve_send_sync(edge_id: str, match_key: str, tier: str) -> tuple[bool, s
             (edge_id, match_key, tier, _ALERTS_SEND_CHANNEL, now),
         )
         if cur.rowcount == 1:
+            reservation_id = int(cur.lastrowid)
             conn.commit()
-            return True, None
+            return True, None, reservation_id
         row = conn.execute(
             "SELECT status, msg_url FROM alerts_send_log "
             "WHERE edge_id = ? AND channel = ? "
@@ -177,18 +182,18 @@ def _reserve_send_sync(edge_id: str, match_key: str, tier: str) -> tuple[bool, s
         ).fetchone()
         conn.commit()
         if row and row[0] == "sent":
-            return False, row[1] or "already_sent"
-        return False, None
+            return False, row[1] or "already_sent", None
+        return False, None, None
     except Exception as exc:
         log.warning("alerts_direct: send reservation failed: %s", exc)
-        return False, None
+        return False, None, None
     finally:
         if conn is not None:
             conn.close()
 
 
-def _release_send_reservation_sync(edge_id: str) -> None:
-    if not edge_id:
+def _release_send_reservation_sync(edge_id: str, reservation_id: int | None) -> None:
+    if not edge_id or reservation_id is None:
         return
     db_path = _alerts_db_path()
     try:
@@ -202,8 +207,8 @@ def _release_send_reservation_sync(edge_id: str) -> None:
         _ensure_alerts_send_log_schema(conn)
         conn.execute(
             "DELETE FROM alerts_send_log "
-            "WHERE edge_id = ? AND channel = ? AND status = 'sending'",
-            (edge_id, _ALERTS_SEND_CHANNEL),
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            (reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
         )
         conn.commit()
     except Exception as exc:
@@ -219,6 +224,7 @@ def _finalize_send_log_sync(
     tier: str,
     image_bytes_size: int,
     msg_url: str | None,
+    reservation_id: int | None,
 ) -> None:
     """Persist a successful Alerts send to alerts_send_log in odds.db.
 
@@ -239,31 +245,23 @@ def _finalize_send_log_sync(
             "UPDATE alerts_send_log "
             "SET match_key = ?, tier = ?, status = 'sent', "
             "image_bytes_size = ?, msg_url = ?, sent_at = ? "
-            "WHERE edge_id = ? AND channel = ?",
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
             (
                 match_key,
                 tier,
                 image_bytes_size,
                 msg_url,
                 time.time(),
+                reservation_id,
                 edge_id,
                 _ALERTS_SEND_CHANNEL,
             ),
         )
         if cur.rowcount == 0:
-            conn.execute(
-                "INSERT OR IGNORE INTO alerts_send_log"
-                " (edge_id, match_key, tier, channel, status, image_bytes_size, msg_url, sent_at)"
-                " VALUES (?, ?, ?, ?, 'sent', ?, ?, ?)",
-                (
-                    edge_id,
-                    match_key,
-                    tier,
-                    _ALERTS_SEND_CHANNEL,
-                    image_bytes_size,
-                    msg_url,
-                    time.time(),
-                ),
+            log.warning(
+                "alerts_direct: send reservation finalize skipped edge_id=%s reservation_id=%s",
+                edge_id,
+                reservation_id,
             )
         conn.commit()
     except Exception as exc:
@@ -325,7 +323,7 @@ async def post_to_alerts(
     # scraper later recalculates and changes the DB row's edge_tier.
     _dl_tier_now = (tip.get("display_tier") or tip.get("edge_tier") or "gold").lower()
 
-    reservation_acquired, existing_msg_url = await asyncio.to_thread(
+    reservation_acquired, existing_msg_url, reservation_id = await asyncio.to_thread(
         _reserve_send_sync,
         edge_id,
         _dl_match_key,
@@ -345,7 +343,7 @@ async def post_to_alerts(
     token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
     if not token:
         log.error("alerts_direct: TELEGRAM_PUBLISHER_BOT_TOKEN not set")
-        await asyncio.to_thread(_release_send_reservation_sync, edge_id)
+        await asyncio.to_thread(_release_send_reservation_sync, edge_id, reservation_id)
         return None
 
     _dl_key_with_tier = f"{_dl_match_key}_{_dl_tier_now}"
@@ -353,7 +351,7 @@ async def post_to_alerts(
         png_bytes = await asyncio.to_thread(_sync_render_card, tip)
     except Exception as exc:
         log.warning("alerts_direct: card render failed for %s: %s", _dl_match_key, exc)
-        await asyncio.to_thread(_release_send_reservation_sync, edge_id)
+        await asyncio.to_thread(_release_send_reservation_sync, edge_id, reservation_id)
         return None
 
     caption = ""
@@ -361,7 +359,7 @@ async def post_to_alerts(
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
     if not msg_url:
-        await asyncio.to_thread(_release_send_reservation_sync, edge_id)
+        await asyncio.to_thread(_release_send_reservation_sync, edge_id, reservation_id)
         return None
 
     latency_ms: int | None = None
@@ -377,7 +375,13 @@ async def post_to_alerts(
     # AC-A: persist send record for event-driven dashboard feed
     _mk = tip.get("match_key") or tip.get("match_id") or edge_id
     await asyncio.to_thread(
-        _finalize_send_log_sync, edge_id, _mk, tier, len(png_bytes), msg_url
+        _finalize_send_log_sync,
+        edge_id,
+        _mk,
+        tier,
+        len(png_bytes),
+        msg_url,
+        reservation_id,
     )
 
     return msg_url

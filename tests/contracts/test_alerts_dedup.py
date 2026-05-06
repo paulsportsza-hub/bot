@@ -28,7 +28,8 @@ def _create_alerts_edge_db(db_path: str) -> None:
                 confirming_signals INTEGER,
                 result TEXT,
                 posted_to_alerts_direct INTEGER DEFAULT 0,
-                posted_to_alerts_direct_claimed_at TEXT
+                posted_to_alerts_direct_claimed_at TEXT,
+                posted_to_alerts_direct_claim_id TEXT
             )
             """
         )
@@ -166,6 +167,68 @@ async def test_tier_fire_alerts_job_reclaims_stale_claim(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stale_claim_owner_cannot_release_reclaimed_edge(monkeypatch, tmp_path):
+    import bot
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE edge_results "
+            "SET posted_to_alerts_direct = -1, "
+            "posted_to_alerts_direct_claimed_at = datetime('now', '-11 minutes'), "
+            "posted_to_alerts_direct_claim_id = 'old-owner'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+                "display_tier": "gold",
+                "edge_tier": "gold",
+            }
+        ],
+    )
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        bot._db_write_retry(
+            "UPDATE edge_results SET posted_to_alerts_direct = 0, "
+            "posted_to_alerts_direct_claimed_at = NULL, "
+            "posted_to_alerts_direct_claim_id = NULL "
+            "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+            "AND posted_to_alerts_direct_claim_id = ?",
+            (edge_id, "old-owner"),
+            db_path=db_path,
+        )
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (1, None)
+
+
+@pytest.mark.asyncio
 async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_path):
     import bot
     import bot_lib.alerts_direct as alerts_direct
@@ -248,3 +311,68 @@ async def test_post_to_alerts_reserves_send_log_before_send(monkeypatch, tmp_pat
     finally:
         conn.close()
     assert row == (1, "sent", "https://t.me/c/3789410835/1")
+
+
+def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(
+    monkeypatch,
+    tmp_path,
+):
+    import bot_lib.alerts_direct as alerts_direct
+
+    db_path = str(tmp_path / "odds.db")
+    monkeypatch.setenv("ALERTS_SEND_LOG_DB_PATH", db_path)
+
+    acquired, existing_url, old_id = alerts_direct._reserve_send_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+    )
+    assert (acquired, existing_url) == (True, None)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE alerts_send_log SET sent_at = ? WHERE id = ?",
+            (time.time() - alerts_direct._SEND_RESERVATION_STALE_SECONDS - 1, old_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    acquired, existing_url, new_id = alerts_direct._reserve_send_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+    )
+    assert (acquired, existing_url) == (True, None)
+    assert new_id != old_id
+
+    alerts_direct._release_send_reservation_sync(
+        "edge_contract_alerts_dedup_01",
+        old_id,
+    )
+    alerts_direct._finalize_send_log_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+        123,
+        "https://t.me/c/3789410835/old",
+        old_id,
+    )
+    alerts_direct._finalize_send_log_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+        456,
+        "https://t.me/c/3789410835/new",
+        new_id,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, status, msg_url FROM alerts_send_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [(new_id, "sent", "https://t.me/c/3789410835/new")]
