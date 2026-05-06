@@ -25893,6 +25893,27 @@ def _db_write_retry(
     return 0
 
 
+def _ensure_tier_fire_alerts_schema(db_path: str | None = None) -> None:
+    """Ensure edge_results has the lease column needed for alert claims."""
+    from scrapers.db_connect import connect_odds_db as _tfas_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfas_default_db
+
+    _tfas_conn = _tfas_conn_fn(db_path or _tfas_default_db)
+    try:
+        _cols = {
+            row[1]
+            for row in _tfas_conn.execute("PRAGMA table_info(edge_results)").fetchall()
+        }
+        if "posted_to_alerts_direct_claimed_at" not in _cols:
+            _tfas_conn.execute(
+                "ALTER TABLE edge_results "
+                "ADD COLUMN posted_to_alerts_direct_claimed_at DATETIME"
+            )
+            _tfas_conn.commit()
+    finally:
+        _tfas_conn.close()
+
+
 async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """BUILD-BOT-ALERTS-DIRECT-01: Post new Gold/Diamond edges to @MzansiEdgeAlerts.
 
@@ -25910,6 +25931,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         from scrapers.db_connect import connect_odds_db as _tfa_conn_fn
         from scrapers.edge.edge_config import DB_PATH as _tfa_db
+        _ensure_tier_fire_alerts_schema(_tfa_db)
         _tfa_conn = _tfa_conn_fn(_tfa_db)
         _tfa_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
         try:
@@ -25922,7 +25944,16 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 FROM edge_results e
                 WHERE e.result IS NULL
                   AND e.edge_tier = 'gold'
-                  AND e.posted_to_alerts_direct = 0
+                  AND (
+                    e.posted_to_alerts_direct = 0
+                    OR (
+                      e.posted_to_alerts_direct = -1
+                      AND (
+                        e.posted_to_alerts_direct_claimed_at IS NULL
+                        OR e.posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')
+                      )
+                    )
+                  )
                   AND e.recommended_at >= datetime('now', '-2 hours')
                 ORDER BY e.recommended_at DESC
                 LIMIT 5
@@ -25953,9 +25984,29 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         try:
             _tfa_claimed = _db_write_retry(
-                "UPDATE edge_results SET posted_to_alerts_direct = -1 "
-                "WHERE edge_id = ? AND posted_to_alerts_direct = 0",
-                (_tfa_edge_id,),
+                "UPDATE edge_results "
+                "SET posted_to_alerts_direct = -1, "
+                "posted_to_alerts_direct_claimed_at = datetime('now') "
+                "WHERE edge_id = ? "
+                "AND result IS NULL "
+                "AND edge_tier = ? "
+                "AND recommended_at = ? "
+                "AND recommended_at >= datetime('now', '-2 hours') "
+                "AND ("
+                "  posted_to_alerts_direct = 0 "
+                "  OR ("
+                "    posted_to_alerts_direct = -1 "
+                "    AND ("
+                "      posted_to_alerts_direct_claimed_at IS NULL "
+                "      OR posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')"
+                "    )"
+                "  )"
+                ")",
+                (
+                    _tfa_edge_id,
+                    _tfa_tier,
+                    _tfa_row.get("recommended_at") or "",
+                ),
                 retries=5,
                 backoff_ms=200,
             )
@@ -26025,6 +26076,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 0 "
+                    ", posted_to_alerts_direct_claimed_at = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
                     (_tfa_edge_id,),
                     retries=5,
@@ -26049,6 +26101,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 _tfa_marked = _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 1 "
+                    ", posted_to_alerts_direct_claimed_at = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
                     (_tfa_edge_id,),
                     retries=10,
@@ -26071,6 +26124,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 _db_write_retry(
                     "UPDATE edge_results SET posted_to_alerts_direct = 0 "
+                    ", posted_to_alerts_direct_claimed_at = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
                     (_tfa_edge_id,),
                     retries=5,
