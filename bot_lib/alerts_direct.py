@@ -108,6 +108,7 @@ def _ensure_alerts_send_log_schema(conn) -> None:
             edge_id          TEXT,
             match_key        TEXT,
             tier             TEXT,
+            row_version      TEXT NOT NULL DEFAULT '',
             channel          TEXT NOT NULL DEFAULT 'alerts',
             status           TEXT NOT NULL DEFAULT 'sent',
             image_bytes_size INTEGER,
@@ -129,6 +130,11 @@ def _ensure_alerts_send_log_schema(conn) -> None:
             "ALTER TABLE alerts_send_log "
             "ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'"
         )
+    if "row_version" not in _cols:
+        conn.execute(
+            "ALTER TABLE alerts_send_log "
+            "ADD COLUMN row_version TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         "DELETE FROM alerts_send_log "
         "WHERE edge_id IS NOT NULL "
@@ -137,24 +143,41 @@ def _ensure_alerts_send_log_schema(conn) -> None:
         "    SELECT MAX(id) AS keep_id "
         "    FROM alerts_send_log "
         "    WHERE edge_id IS NOT NULL "
-        "    GROUP BY edge_id, channel"
+        "    GROUP BY edge_id, channel, row_version"
         "  )"
         ")"
     )
+    conn.execute("DROP INDEX IF EXISTS uix_alerts_send_log_edge_channel")
     conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uix_alerts_send_log_edge_channel "
-        "ON alerts_send_log(edge_id, channel)"
+        "CREATE UNIQUE INDEX IF NOT EXISTS uix_alerts_send_log_edge_channel_version "
+        "ON alerts_send_log(edge_id, channel, row_version)"
     )
+
+
+def _send_row_version(tip: dict) -> str:
+    explicit = str(tip.get("_alerts_row_version") or "").strip()
+    if explicit:
+        return explicit
+    parts = [
+        tip.get("recommended_at") or "",
+        tip.get("display_tier") or tip.get("edge_tier") or "",
+        tip.get("bet_type") or tip.get("outcome_key") or tip.get("outcome") or "",
+        tip.get("recommended_odds") or tip.get("odds") or "",
+        tip.get("bookmaker_key") or tip.get("bookmaker") or "",
+    ]
+    return "|".join(str(part) for part in parts)
 
 
 def _reserve_send_sync(
     edge_id: str,
     match_key: str,
     tier: str,
+    row_version: str = "",
 ) -> tuple[bool, str | None, int | None]:
     """Atomically reserve an Alerts send; return (acquired, existing_url, row id)."""
     if not edge_id:
         return False, None, None
+    row_version = row_version or ""
     db_path = _alerts_db_path()
     try:
         from scrapers.db_connect import connect_odds_db  # type: ignore[import]
@@ -170,19 +193,21 @@ def _reserve_send_sync(
         conn.execute(
             "UPDATE alerts_send_log "
             "SET status = 'unknown' "
-            "WHERE edge_id = ? AND channel = ? AND status = 'posting' AND sent_at < ?",
-            (edge_id, _ALERTS_SEND_CHANNEL, stale_before),
+            "WHERE edge_id = ? AND channel = ? AND row_version = ? "
+            "AND status = 'posting' AND sent_at < ?",
+            (edge_id, _ALERTS_SEND_CHANNEL, row_version, stale_before),
         )
         conn.execute(
             "DELETE FROM alerts_send_log "
-            "WHERE edge_id = ? AND channel = ? AND status = 'sending' AND sent_at < ?",
-            (edge_id, _ALERTS_SEND_CHANNEL, stale_before),
+            "WHERE edge_id = ? AND channel = ? AND row_version = ? "
+            "AND status = 'sending' AND sent_at < ?",
+            (edge_id, _ALERTS_SEND_CHANNEL, row_version, stale_before),
         )
         cur = conn.execute(
             "INSERT OR IGNORE INTO alerts_send_log"
-            " (edge_id, match_key, tier, channel, status, image_bytes_size, msg_url, sent_at)"
-            " VALUES (?, ?, ?, ?, 'sending', 0, '', ?)",
-            (edge_id, match_key, tier, _ALERTS_SEND_CHANNEL, now),
+            " (edge_id, match_key, tier, row_version, channel, status, image_bytes_size, msg_url, sent_at)"
+            " VALUES (?, ?, ?, ?, ?, 'sending', 0, '', ?)",
+            (edge_id, match_key, tier, row_version, _ALERTS_SEND_CHANNEL, now),
         )
         if cur.rowcount == 1:
             reservation_id = int(cur.lastrowid)
@@ -190,9 +215,9 @@ def _reserve_send_sync(
             return True, None, reservation_id
         row = conn.execute(
             "SELECT status, msg_url FROM alerts_send_log "
-            "WHERE edge_id = ? AND channel = ? "
+            "WHERE edge_id = ? AND channel = ? AND row_version = ? "
             "ORDER BY sent_at DESC LIMIT 1",
-            (edge_id, _ALERTS_SEND_CHANNEL),
+            (edge_id, _ALERTS_SEND_CHANNEL, row_version),
         ).fetchone()
         conn.commit()
         if row and row[0] == "sent":
@@ -365,12 +390,12 @@ def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -
     try:
         files = {"photo": ("card.png", io.BytesIO(png_bytes), "image/png")}
         resp = _req.post(api_url, data=payload, files=files, timeout=30)
-    except _req.exceptions.ReadTimeout as exc:
-        log.warning("alerts_direct: sendPhoto ambiguous read timeout: %s", exc)
-        return ALERTS_SEND_UNKNOWN
-    except _req.exceptions.RequestException as exc:
-        log.warning("alerts_direct: sendPhoto request failed before accepted response: %s", exc)
+    except _req.exceptions.ConnectTimeout as exc:
+        log.warning("alerts_direct: sendPhoto connect timeout before upload: %s", exc)
         return None
+    except _req.exceptions.RequestException as exc:
+        log.warning("alerts_direct: sendPhoto ambiguous request failure: %s", exc)
+        return ALERTS_SEND_UNKNOWN
 
     try:
         resp.raise_for_status()
@@ -409,6 +434,7 @@ async def post_to_alerts(
         edge_id,
         _dl_match_key,
         _dl_tier_now,
+        _send_row_version(tip),
     )
     if existing_msg_url:
         if existing_msg_url == ALERTS_SEND_UNKNOWN:

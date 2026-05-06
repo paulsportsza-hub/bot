@@ -25923,6 +25923,185 @@ def _ensure_tier_fire_alerts_schema(db_path: str | None = None) -> None:
         _tfas_conn.close()
 
 
+_TIER_FIRE_DIAMOND_DM_STALE_SECONDS = 10 * 60
+
+
+def _tier_fire_alerts_row_version(row: dict) -> str:
+    return "|".join(
+        str(row.get(key) or "")
+        for key in (
+            "recommended_at",
+            "edge_tier",
+            "bet_type",
+            "recommended_odds",
+            "bookmaker",
+            "predicted_ev",
+        )
+    )
+
+
+def _ensure_tier_fire_diamond_dm_log_schema(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alerts_diamond_dm_log (
+            edge_id     TEXT NOT NULL,
+            row_version TEXT NOT NULL DEFAULT '',
+            user_id     INTEGER NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'sending',
+            sent_at     REAL NOT NULL,
+            PRIMARY KEY(edge_id, row_version, user_id)
+        )
+        """
+    )
+    _cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(alerts_diamond_dm_log)").fetchall()
+    }
+    if "row_version" not in _cols:
+        conn.execute(
+            "ALTER TABLE alerts_diamond_dm_log "
+            "ADD COLUMN row_version TEXT NOT NULL DEFAULT ''"
+        )
+    if "status" not in _cols:
+        conn.execute(
+            "ALTER TABLE alerts_diamond_dm_log "
+            "ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'"
+        )
+    if "sent_at" not in _cols:
+        conn.execute(
+            "ALTER TABLE alerts_diamond_dm_log "
+            "ADD COLUMN sent_at REAL NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        "DELETE FROM alerts_diamond_dm_log "
+        "WHERE edge_id IS NOT NULL "
+        "AND rowid NOT IN ("
+        "  SELECT keep_id FROM ("
+        "    SELECT MAX(rowid) AS keep_id "
+        "    FROM alerts_diamond_dm_log "
+        "    GROUP BY edge_id, row_version, user_id"
+        "  )"
+        ")"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uix_alerts_diamond_dm_log_edge_version_user "
+        "ON alerts_diamond_dm_log(edge_id, row_version, user_id)"
+    )
+
+
+def _reserve_tier_fire_diamond_dm_sync(
+    edge_id: str,
+    row_version: str,
+    user_id: int,
+) -> bool:
+    if not edge_id or not row_version:
+        return True
+    import time as _tfadm_time
+    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
+
+    _tfadm_conn = None
+    try:
+        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
+        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
+        _now = _tfadm_time.time()
+        _stale_before = _now - _TIER_FIRE_DIAMOND_DM_STALE_SECONDS
+        _tfadm_conn.execute(
+            "DELETE FROM alerts_diamond_dm_log "
+            "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
+            "AND status = 'sending' AND sent_at < ?",
+            (edge_id, row_version, user_id, _stale_before),
+        )
+        _cur = _tfadm_conn.execute(
+            "INSERT OR IGNORE INTO alerts_diamond_dm_log "
+            "(edge_id, row_version, user_id, status, sent_at) "
+            "VALUES (?, ?, ?, 'sending', ?)",
+            (edge_id, row_version, user_id, _now),
+        )
+        _tfadm_conn.commit()
+        return _cur.rowcount == 1
+    except Exception as _tfadm_exc:
+        log.warning(
+            "_fire_diamond_edge_dms: reservation failed edge_id=%s user=%s: %s",
+            edge_id,
+            user_id,
+            _tfadm_exc,
+        )
+        return False
+    finally:
+        if _tfadm_conn is not None:
+            _tfadm_conn.close()
+
+
+def _mark_tier_fire_diamond_dm_sent_sync(
+    edge_id: str,
+    row_version: str,
+    user_id: int,
+) -> None:
+    if not edge_id or not row_version:
+        return
+    import time as _tfadm_time
+    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
+
+    _tfadm_conn = None
+    try:
+        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
+        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
+        _tfadm_conn.execute(
+            "UPDATE alerts_diamond_dm_log "
+            "SET status = 'sent', sent_at = ? "
+            "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
+            "AND status = 'sending'",
+            (_tfadm_time.time(), edge_id, row_version, user_id),
+        )
+        _tfadm_conn.commit()
+    except Exception as _tfadm_exc:
+        log.warning(
+            "_fire_diamond_edge_dms: sent-mark failed edge_id=%s user=%s: %s",
+            edge_id,
+            user_id,
+            _tfadm_exc,
+        )
+    finally:
+        if _tfadm_conn is not None:
+            _tfadm_conn.close()
+
+
+def _release_tier_fire_diamond_dm_sync(
+    edge_id: str,
+    row_version: str,
+    user_id: int,
+) -> None:
+    if not edge_id or not row_version:
+        return
+    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
+
+    _tfadm_conn = None
+    try:
+        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
+        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
+        _tfadm_conn.execute(
+            "DELETE FROM alerts_diamond_dm_log "
+            "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
+            "AND status = 'sending'",
+            (edge_id, row_version, user_id),
+        )
+        _tfadm_conn.commit()
+    except Exception as _tfadm_exc:
+        log.warning(
+            "_fire_diamond_edge_dms: release failed edge_id=%s user=%s: %s",
+            edge_id,
+            user_id,
+            _tfadm_exc,
+        )
+    finally:
+        if _tfadm_conn is not None:
+            _tfadm_conn.close()
+
+
 async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """BUILD-BOT-ALERTS-DIRECT-01: Post new Gold/Diamond edges to @MzansiEdgeAlerts.
 
@@ -25989,6 +26168,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _tfa_edge_id = _tfa_row.get("edge_id") or ""
         _tfa_mk = _tfa_row.get("match_key") or ""
         _tfa_tier = (_tfa_row.get("edge_tier") or "gold").lower()
+        _tfa_row_version = _tier_fire_alerts_row_version(_tfa_row)
         if not _tfa_edge_id or not _tfa_mk:
             continue
 
@@ -26080,6 +26260,11 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
                 "edge_v2": {"composite_score": float(_tfa_row.get("composite_score") or 0), "confirming_signals": int(_tfa_row.get("confirming_signals") or 0)},
             }
+        _tfa_tip["_alerts_row_version"] = _tfa_row_version
+        _tfa_tip["recommended_at"] = _tfa_row.get("recommended_at") or _tfa_tip.get(
+            "recommended_at",
+            "",
+        )
 
         try:
             _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
@@ -26116,10 +26301,17 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             continue
 
         if _tfa_msg_url:
-            _tfa_new_channel_send = bool(
-                getattr(_tfa_msg_url, "alerts_new_send", True)
-            )
-            _tfa_marked_ok = False
+            # AC-E: Diamond edges also DM active Diamond subscribers personally.
+            # Send before the final posted mark so a crash can retry missing DMs
+            # through the channel send log without duplicating delivered users.
+            if _tfa_tier == "diamond":
+                await _fire_diamond_edge_dms(
+                    ctx,
+                    _tfa_tip,
+                    _tfa_mk,
+                    _tfa_edge_id,
+                    _tfa_row_version,
+                )
             # AC-F: mark posted_to_alerts_direct=1 after successful claimed send.
             try:
                 _tfa_marked = _db_write_retry(
@@ -26155,16 +26347,11 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         retries=5,
                         backoff_ms=200,
                     )
-                else:
-                    _tfa_marked_ok = True
             except Exception as _tfa_mark_exc:
                 log.error(
                     "_tier_fire_alerts_job: mark failed after send for edge_id=%s; leaving claimed to prevent duplicate: %s",
                     _tfa_edge_id, _tfa_mark_exc,
                 )
-            # AC-E: Diamond edges also DM active Diamond subscribers personally.
-            if _tfa_tier == "diamond" and _tfa_new_channel_send:
-                await _fire_diamond_edge_dms(ctx, _tfa_tip, _tfa_mk)
         else:
             try:
                 _db_write_retry(
@@ -26192,6 +26379,8 @@ async def _fire_diamond_edge_dms(
     ctx: "ContextTypes.DEFAULT_TYPE",
     tip: dict,
     match_key: str,
+    edge_id: str = "",
+    row_version: str = "",
 ) -> None:
     """AC-E: DM active Diamond subscribers the canonical edge card on tier-fire.
 
@@ -26234,16 +26423,53 @@ async def _fire_diamond_edge_dms(
     ]])
 
     import io as _dd_io
+    _dd_use_delivery_log = bool(edge_id and row_version)
     for _dd_uid in _dd_users:
         try:
             if not await _can_send_notification(_dd_uid):
                 continue
-            await ctx.bot.send_photo(
-                chat_id=_dd_uid,
-                photo=_dd_io.BytesIO(_dd_bytes),
-                reply_markup=_dd_markup,
-            )
-            await _after_send(_dd_uid)
+            if _dd_use_delivery_log:
+                _dd_reserved = await asyncio.to_thread(
+                    _reserve_tier_fire_diamond_dm_sync,
+                    edge_id,
+                    row_version,
+                    _dd_uid,
+                )
+                if not _dd_reserved:
+                    continue
+            try:
+                await ctx.bot.send_photo(
+                    chat_id=_dd_uid,
+                    photo=_dd_io.BytesIO(_dd_bytes),
+                    reply_markup=_dd_markup,
+                )
+            except Exception as _dd_send_exc:
+                if _dd_use_delivery_log:
+                    await asyncio.to_thread(
+                        _release_tier_fire_diamond_dm_sync,
+                        edge_id,
+                        row_version,
+                        _dd_uid,
+                    )
+                log.debug(
+                    "_fire_diamond_edge_dms: DM failed for user=%d: %s",
+                    _dd_uid, _dd_send_exc,
+                )
+                continue
+            try:
+                await _after_send(_dd_uid)
+            except Exception as _dd_after_exc:
+                log.debug(
+                    "_fire_diamond_edge_dms: after_send failed for user=%d: %s",
+                    _dd_uid, _dd_after_exc,
+                )
+            if _dd_use_delivery_log:
+                await asyncio.to_thread(
+                    _mark_tier_fire_diamond_dm_sent_sync,
+                    edge_id,
+                    row_version,
+                    _dd_uid,
+                )
             log.debug(
                 "_fire_diamond_edge_dms: sent to user=%d match_key=%s",
                 _dd_uid, match_key,
