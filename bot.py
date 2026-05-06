@@ -26035,8 +26035,15 @@ def _reserve_tier_fire_diamond_dm_sync(
             (edge_id, row_version, user_id),
         ).fetchone()
         _tfadm_conn.commit()
-        if _row and _row[0] in ("sent", "unknown"):
+        if _row and _row[0] == "sent":
             return False
+        if _row and _row[0] == "unknown":
+            log.error(
+                "_fire_diamond_edge_dms: ambiguous DM state blocks edge closure "
+                "edge_id=%s user=%s",
+                edge_id,
+                user_id,
+            )
         return None
     except Exception as _tfadm_exc:
         log.warning(
@@ -26125,41 +26132,6 @@ def _mark_tier_fire_diamond_dm_sent_sync(
             _tfadm_conn.close()
 
 
-def _mark_tier_fire_diamond_dm_unknown_sync(
-    edge_id: str,
-    row_version: str,
-    user_id: int,
-) -> None:
-    if not edge_id or not row_version:
-        return
-    import time as _tfadm_time
-    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
-    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
-
-    _tfadm_conn = None
-    try:
-        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
-        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
-        _tfadm_conn.execute(
-            "UPDATE alerts_diamond_dm_log "
-            "SET status = 'unknown', sent_at = ? "
-            "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
-            "AND status = 'posting'",
-            (_tfadm_time.time(), edge_id, row_version, user_id),
-        )
-        _tfadm_conn.commit()
-    except Exception as _tfadm_exc:
-        log.warning(
-            "_fire_diamond_edge_dms: unknown-mark failed edge_id=%s user=%s: %s",
-            edge_id,
-            user_id,
-            _tfadm_exc,
-        )
-    finally:
-        if _tfadm_conn is not None:
-            _tfadm_conn.close()
-
-
 def _release_tier_fire_diamond_dm_sync(
     edge_id: str,
     row_version: str,
@@ -26177,7 +26149,7 @@ def _release_tier_fire_diamond_dm_sync(
         _tfadm_conn.execute(
             "DELETE FROM alerts_diamond_dm_log "
             "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
-            "AND status = 'sending'",
+            "AND status IN ('sending', 'posting')",
             (edge_id, row_version, user_id),
         )
         _tfadm_conn.commit()
@@ -26588,9 +26560,10 @@ async def _fire_diamond_edge_dms(
                     reply_markup=_dd_markup,
                 )
             except Exception as _dd_send_exc:
+                _dd_retryable_failure = True
                 if _dd_use_delivery_log:
                     await asyncio.to_thread(
-                        _mark_tier_fire_diamond_dm_unknown_sync,
+                        _release_tier_fire_diamond_dm_sync,
                         edge_id,
                         row_version,
                         _dd_uid,

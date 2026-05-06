@@ -575,7 +575,7 @@ async def test_fire_diamond_edge_dms_does_not_retry_stale_posting_dm(
     finally:
         conn.close()
 
-    assert await bot._fire_diamond_edge_dms(
+    assert not await bot._fire_diamond_edge_dms(
         ctx,
         {"match_key": "contract_home_vs_contract_away_2026-05-17"},
         "contract_home_vs_contract_away_2026-05-17",
@@ -592,6 +592,60 @@ async def test_fire_diamond_edge_dms_does_not_retry_stale_posting_dm(
     finally:
         conn.close()
     assert row == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_releases_retryable_send_exception(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    async def fake_diamond_users():
+        return [101]
+
+    async def fake_can_send(user_id):
+        return True
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+    monkeypatch.setattr(bot, "_can_send_notification", fake_can_send)
+
+    class FailingTelegramBot:
+        async def send_photo(self, chat_id, photo, reply_markup=None):
+            raise RuntimeError("network before accepted response")
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    ctx = SimpleNamespace(bot=FailingTelegramBot())
+    assert not await bot._fire_diamond_edge_dms(
+        ctx,
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (0,)
 
 
 @pytest.mark.asyncio
