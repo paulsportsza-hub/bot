@@ -20,6 +20,7 @@ Phase-0 summary (probed 2026-04-30 on server):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
@@ -37,7 +38,18 @@ _SERVER_DEFAULT = "paulsportsza@37.27.179.53"
 # next command (`codex --profile high`) was injected, producing the
 # `SEMAPHORcodex --profile high` corruption observed 2026-05-02.
 _PROMPT_WAIT_POLL_S: float = 0.2
-_PROMPT_WAIT_TIMEOUT_S: float = 30.0
+_PROMPT_WAIT_TIMEOUT_S: float = 60.0
+
+
+class SpawnTimeoutError(RuntimeError):
+    """Raised when a spawn marker is not observed before timeout."""
+
+
+def _split_marker_for_shell(marker: str) -> str:
+    """Emit marker without typing the contiguous marker into the terminal."""
+    half = len(marker) // 2
+    a, b = marker[:half], marker[half:]
+    return f'printf "%s%s\\n" "{a}" "{b}"'
 
 # Model Routing v1 (LOCKED 2 May 2026 PM, supersedes Codex-only cutover):
 # map Agent string substring → full executor command parts (binary + flags).
@@ -142,38 +154,40 @@ async def _wait_for_marker(
     """Poll the surface buffer until ``marker`` appears (echoed back by the
     remote shell) or ``timeout_s`` elapses.
 
-    Returns True on hit, False on timeout. Caller decides whether to proceed
-    on timeout — current policy is "log + proceed" so a flaky surface read
-    can't wedge the spawn forever, but the safety ceiling means we won't
-    fire the next step mid-echo of a large payload.
+    Returns True on hit. Raises on timeout so the caller cannot proceed to
+    the next spawn step while a large payload is still echoing.
     """
     deadline = asyncio.get_event_loop().time() + timeout_s
+    last_buf = ""
+    last_non_string_type: str | None = None
     while True:
         try:
             raw = cmux.surface_read_text(surface_id)
         except Exception as exc:  # noqa: BLE001 — defensive, log + retry
             log.warning("prompt-wait read failed (surface=%s): %s", surface_id, exc)
             raw = ""
-        # Defensive fast-path: a non-string surface buffer means the
-        # backend can't actually report buffer content (test fixtures
-        # with bare MagicMock, or a CMUX build that lacks
-        # surface.read_text). Polling a non-inspectable surface would
-        # spin until safety-ceiling. Treat as "marker arrived" — the
-        # caller's compound `cmd ; echo MARKER` still serialises the
-        # write before the next send, so we lose the prompt-return
-        # check but keep ordering.
-        if not isinstance(raw, str):
-            return True
-        buf = raw or ""
-        if marker in buf:
-            return True
+
+        if isinstance(raw, str):
+            last_buf = raw
+            last_non_string_type = None
+            if marker in raw:
+                return True
+        else:
+            non_string_type = type(raw).__name__
+            if non_string_type != last_non_string_type:
+                log.warning(
+                    "prompt-wait surface=%s returned non-string buffer (%s); retrying",
+                    surface_id, non_string_type,
+                )
+                last_non_string_type = non_string_type
+
         if asyncio.get_event_loop().time() >= deadline:
-            log.warning(
-                "prompt-wait timeout: marker=%r not seen on surface=%s in %.1fs "
-                "— proceeding (safety ceiling).",
-                marker, surface_id, timeout_s,
+            tail = last_buf[-500:] if isinstance(last_buf, str) else ""
+            raise SpawnTimeoutError(
+                f"marker {marker!r} not seen on surface={surface_id} within "
+                f"{timeout_s:.1f}s; last_non_string={last_non_string_type}; "
+                f"buffer_tail={tail!r}"
             )
-            return False
         await asyncio.sleep(poll_s)
 
 
@@ -197,7 +211,7 @@ def _build_dispatch_block(brief_data: dict[str, Any]) -> str:
     brief_id = brief_data.get("brief_id", "UNKNOWN")
     notion_url = brief_data.get("notion_url", "")
     date = str(brief_data.get("enqueued_at", ""))[:10]
-    notion_token = os.environ.get("NOTION_TOKEN", "$NOTION_TOKEN")
+    notion_token = "$NOTION_TOKEN"
     return (
         f"{brief_id} — {date}\n"
         f"{notion_url}\n"
@@ -248,8 +262,8 @@ class MultiStepSpawn:
         # AC-4: append a unique marker so we wait for the local shell to
         # finish echoing before the mosh handshake begins.
         cd_cmd = _local_cd_command(brief_id)
-        cd_marker = f"___DISPATCH_CD_DONE_{secrets.token_hex(4)}___"
-        cd_cmd_with_marker = f'{cd_cmd} ; echo "{cd_marker}"'
+        cd_marker = f"___BRIDGE_DISPATCH_CD_{secrets.token_hex(16)}___"
+        cd_cmd_with_marker = f'{cd_cmd} && {_split_marker_for_shell(cd_marker)}'
         log.info("spawn[0/7] local-cd → surface=%s brief=%s", surface_id, brief_id)
         cmux.surface_send_text(surface_id, cd_cmd_with_marker)
         cmux.surface_send_key(surface_id, "enter")
@@ -274,9 +288,18 @@ class MultiStepSpawn:
         # and the spawn must fail loudly so the bridge re-dispatches
         # rather than typing mkdir into limbo.
         # (FIX-SPAWN-MOSH-READINESS-PROBE-01, 6 May 2026.)
-        ready_marker = f"___REMOTE_SHELL_READY_{secrets.token_hex(4)}___"
+        local_dispatch_dir = f"/tmp/_briefs/{brief_id}"
+        expected_user = self.server.split("@", 1)[0] if "@" in self.server else ""
+        ready_marker = f"___BRIDGE_MOSH_REMOTE_READY_{secrets.token_hex(16)}___"
+        probe_checks = [f'[ "$(pwd)" != "{local_dispatch_dir}" ]']
+        if expected_user:
+            probe_checks.extend([
+                f'[ "$(whoami)" = "{expected_user}" ]',
+                '[ -d "$HOME/dispatch/queue" ]',
+            ])
+        probe_cmd = " && ".join(probe_checks + [_split_marker_for_shell(ready_marker)])
         log.info("spawn[1.5/7] remote-readiness-probe → surface=%s", surface_id)
-        cmux.surface_send_text(surface_id, f'echo "{ready_marker}"')
+        cmux.surface_send_text(surface_id, probe_cmd)
         cmux.surface_send_key(surface_id, "enter")
         if not await _wait_for_marker(
             surface_id, cmux, ready_marker, timeout_s=60.0,
@@ -296,7 +319,9 @@ class MultiStepSpawn:
         # the base64-decoded content to a file BEFORE claude launches,
         # then have claude read the file as a single-line message.
         import base64 as _b64
-        b64_payload = _b64.b64encode(dispatch_block.encode("utf-8")).decode("ascii")
+        dispatch_bytes = dispatch_block.encode("utf-8")
+        b64_payload = _b64.b64encode(dispatch_bytes).decode("ascii")
+        dispatch_sha = hashlib.sha256(dispatch_bytes).hexdigest()
         dispatch_dir = f"/tmp/_briefs/{brief_id}"
         dispatch_file = f"{dispatch_dir}/dispatch.md"
         # AC-4: replace fixed sleep(1.0) with a unique-marker poll. Large
@@ -307,12 +332,13 @@ class MultiStepSpawn:
         # the same compound command so it only fires after the file write
         # completes; we then poll the surface buffer for the marker before
         # advancing to step 3.
-        dispatch_marker = f"___DISPATCH_WRITE_DONE_{secrets.token_hex(4)}___"
+        dispatch_marker = f"___BRIDGE_DISPATCH_WRITE_{secrets.token_hex(16)}___"
         write_cmd = (
             f"mkdir -p {dispatch_dir} && "
             f"printf %s {b64_payload} | base64 -d > {dispatch_file} && "
-            f"echo 'dispatch written: {dispatch_file}' ; "
-            f'echo "{dispatch_marker}"'
+            f"[ \"$(sha256sum {dispatch_file} | head -c64)\" = \"{dispatch_sha}\" ] && "
+            f"echo 'dispatch written: {dispatch_file}' && "
+            f"{_split_marker_for_shell(dispatch_marker)}"
         )
         log.info(
             "spawn[2.5/7] dispatch-write → file=%s payload_b64_len=%d",

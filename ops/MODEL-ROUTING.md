@@ -239,17 +239,17 @@ Two active model levels × four roles = 8 active options as of 3 May 2026 (BUILD
 
 ## 10. CODEX REVIEW GATE (LOCKED 4 May 2026, v4.5; amended 6 May 2026)
 
-Routing v1 pivot (v4.5, 4 May 2026 — supersedes v4.4, 3 May 2026): Codex stops being a primary executor in hybrid dispatch. Claude (Sonnet | Opus Max Effort) executes; Codex reviews via `/codex:review --wait` (standard, default) or `/codex:adversarial-review --wait <focus>` (adversarial, DISCRETIONARY) at the end of every code-touching brief, before mark_done.sh. Pure-codex dispatch is the 6 May 2026 amendment: when Codex is the executor, the review gate is a fresh inline `codex exec` sub-agent (`codex --profile xhigh exec --quiet`) per `FIX-SO45-CODEX-INLINE-SUBAGENT-01`, not the slash-command/plugin path. Locked under SO #45.
+Routing v1 pivot (v4.5, 4 May 2026 — supersedes v4.4, 3 May 2026): Codex stops being a primary executor in hybrid dispatch. Claude (Sonnet | Opus Max Effort) executes; Codex reviews via `/codex:review --wait` (standard, default) or `/codex:adversarial-review --wait <focus>` (adversarial, DISCRETIONARY) at the end of every code-touching brief, before mark_done.sh. Pure-codex dispatch is the 6 May 2026 amendment: when Codex is the executor, the review gate is a fresh inline `codex exec` sub-agent (`codex --profile xhigh exec`) per `FIX-SO45-CODEX-INLINE-SUBAGENT-01`, not the slash-command/plugin path. Locked under SO #45.
 
 ### Lifecycle (one extra mandatory step per brief)
 
-After commit + push, before mark_done.sh: (1) if `DISPATCH_MODE=hybrid`, run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus>` when explicitly declared) on the wave branch; (2) if `DISPATCH_MODE=pure-codex`, run `codex --profile xhigh exec --quiet "<review prompt>"` as a fresh inline sub-agent; (3) if blockers / `needs-changes`, address with additional commits + push, then re-run; (4) only proceed to mark_done.sh when review returns no blockers; (5) include the review summary verbatim under `## Codex Review` for hybrid or `## Codex Sub-Agent Review` for pure-codex; (6) state `Outcome: clean | blockers-addressed | needs-changes | bootstrap-exempt`.
+After commit + push, before mark_done.sh: (1) if `DISPATCH_MODE=hybrid`, run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus>` when explicitly declared) on the wave branch; (2) if `DISPATCH_MODE=pure-codex`, run `codex --profile xhigh exec "<review prompt>"` as a fresh inline sub-agent; (3) if blockers / `needs-changes`, address with additional commits + push, then re-run; (4) only proceed to mark_done.sh when review returns no blockers; (5) include the review summary verbatim under `## Codex Review` for hybrid or `## Codex Sub-Agent Review` for pure-codex; (6) state `Outcome: clean | blockers-addressed | needs-changes | bootstrap-exempt`.
 
 ### Review modes
 
 - Hybrid standard: `/codex:review --wait` — default for Claude-executed briefs. Catches functional correctness, regressions, contract drift, gate coverage.
 - Hybrid adversarial: `/codex:adversarial-review --wait <focus text>` — DISCRETIONARY. Invoked only when: (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard hybrid review output recommends escalation, or (c) Paul override. Never auto-fired from trigger match alone.
-- Pure-codex standard: `codex --profile xhigh exec --quiet "<review prompt>"` — default for Codex-executed briefs. This is the `FIX-SO45-CODEX-INLINE-SUBAGENT-01` lock event: fresh process, fresh context, synchronous stdout, no slash-command/plugin dependency.
+- Pure-codex standard: `codex --profile xhigh exec "<review prompt>"` — default for Codex-executed briefs. This is the `FIX-SO45-CODEX-INLINE-SUBAGENT-01` lock event: fresh process, fresh context, synchronous stdout, no slash-command/plugin dependency.
 - Pure-codex adversarial: same `codex exec` mechanism with adversarial prompt framing when AC explicitly declares `review_mode: adversarial-review` or a hard trigger applies.
 
 ### Adversarial-review mandatory triggers (narrowed 6 → 3 in v4.5)
