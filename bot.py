@@ -25930,12 +25930,18 @@ def _tier_fire_alerts_row_version(row: dict) -> str:
     return "|".join(
         str(row.get(key) or "")
         for key in (
+            "match_key",
             "recommended_at",
             "edge_tier",
             "bet_type",
             "recommended_odds",
             "bookmaker",
             "predicted_ev",
+            "league",
+            "match_date",
+            "composite_score",
+            "confirming_signals",
+            "result",
         )
     )
 
@@ -26035,7 +26041,7 @@ def _reserve_tier_fire_diamond_dm_sync(
             (edge_id, row_version, user_id),
         ).fetchone()
         _tfadm_conn.commit()
-        if _row and _row[0] == "sent":
+        if _row and _row[0] in ("sent", "skipped"):
             return False
         if _row and _row[0] == "unknown":
             log.error(
@@ -26132,6 +26138,45 @@ def _mark_tier_fire_diamond_dm_sent_sync(
             _tfadm_conn.close()
 
 
+def _mark_tier_fire_diamond_dm_status_sync(
+    edge_id: str,
+    row_version: str,
+    user_id: int,
+    status: str,
+) -> bool:
+    if not edge_id or not row_version or status not in {"unknown", "skipped"}:
+        return False
+    import time as _tfadm_time
+    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
+
+    _tfadm_conn = None
+    try:
+        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
+        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
+        _cur = _tfadm_conn.execute(
+            "UPDATE alerts_diamond_dm_log "
+            "SET status = ?, sent_at = ? "
+            "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
+            "AND status = 'posting'",
+            (status, _tfadm_time.time(), edge_id, row_version, user_id),
+        )
+        _tfadm_conn.commit()
+        return _cur.rowcount == 1
+    except Exception as _tfadm_exc:
+        log.warning(
+            "_fire_diamond_edge_dms: %s-mark failed edge_id=%s user=%s: %s",
+            status,
+            edge_id,
+            user_id,
+            _tfadm_exc,
+        )
+        return False
+    finally:
+        if _tfadm_conn is not None:
+            _tfadm_conn.close()
+
+
 def _release_tier_fire_diamond_dm_sync(
     edge_id: str,
     row_version: str,
@@ -26163,6 +26208,29 @@ def _release_tier_fire_diamond_dm_sync(
     finally:
         if _tfadm_conn is not None:
             _tfadm_conn.close()
+
+
+def _tier_fire_diamond_dm_failure_state(exc: Exception) -> str:
+    name = exc.__class__.__name__.lower()
+    msg = str(exc).lower()
+    if "forbidden" in name or "unauthorized" in name:
+        return "skipped"
+    if "badrequest" in name and any(
+        phrase in msg
+        for phrase in (
+            "chat not found",
+            "bot was blocked",
+            "user is deactivated",
+            "have no rights",
+            "not enough rights",
+        )
+    ):
+        return "skipped"
+    if any(token in name for token in ("timeout", "network", "connection")):
+        return "unknown"
+    if any(token in msg for token in ("timeout", "timed out", "disconnect")):
+        return "unknown"
+    return "retry"
 
 
 async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -26243,12 +26311,17 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "SET posted_to_alerts_direct_claimed_at = datetime('now'), "
                 "posted_to_alerts_direct_claim_id = ? "
                 "WHERE edge_id = ? "
+                "AND match_key = ? "
                 "AND result IS NULL "
                 "AND edge_tier = ? "
                 "AND bet_type = ? "
                 "AND recommended_odds = ? "
                 "AND bookmaker = ? "
                 "AND predicted_ev = ? "
+                "AND league = ? "
+                "AND match_date = ? "
+                "AND composite_score = ? "
+                "AND confirming_signals = ? "
                 "AND recommended_at = ? "
                 "AND recommended_at >= datetime('now', '-2 hours') "
                 "AND posted_to_alerts_direct = 0 "
@@ -26262,11 +26335,16 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 (
                     _tfa_claim_id,
                     _tfa_edge_id,
+                    _tfa_mk,
                     _tfa_tier,
                     _tfa_row.get("bet_type") or "",
                     _tfa_row.get("recommended_odds") or 0,
                     _tfa_row.get("bookmaker") or "",
                     _tfa_row.get("predicted_ev") or 0,
+                    _tfa_row.get("league") or "",
+                    _tfa_row.get("match_date") or "",
+                    _tfa_row.get("composite_score") or 0,
+                    _tfa_row.get("confirming_signals") or 0,
                     _tfa_row.get("recommended_at") or "",
                 ),
                 retries=5,
@@ -26415,21 +26493,33 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     ", posted_to_alerts_direct_claim_id = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
                     "AND posted_to_alerts_direct_claim_id = ? "
+                    "AND result IS NULL "
+                    "AND match_key = ? "
                     "AND recommended_at = ? "
+                    "AND recommended_at >= datetime('now', '-2 hours') "
                     "AND edge_tier = ? "
                     "AND bet_type = ? "
                     "AND recommended_odds = ? "
                     "AND bookmaker = ? "
-                    "AND predicted_ev = ?",
+                    "AND predicted_ev = ? "
+                    "AND league = ? "
+                    "AND match_date = ? "
+                    "AND composite_score = ? "
+                    "AND confirming_signals = ?",
                     (
                         _tfa_edge_id,
                         _tfa_claim_id,
+                        _tfa_mk,
                         _tfa_row.get("recommended_at") or "",
                         _tfa_tier,
                         _tfa_row.get("bet_type") or "",
                         _tfa_row.get("recommended_odds") or 0,
                         _tfa_row.get("bookmaker") or "",
                         _tfa_row.get("predicted_ev") or 0,
+                        _tfa_row.get("league") or "",
+                        _tfa_row.get("match_date") or "",
+                        _tfa_row.get("composite_score") or 0,
+                        _tfa_row.get("confirming_signals") or 0,
                     ),
                     retries=10,
                     backoff_ms=500,
@@ -26560,14 +26650,28 @@ async def _fire_diamond_edge_dms(
                     reply_markup=_dd_markup,
                 )
             except Exception as _dd_send_exc:
-                _dd_retryable_failure = True
+                _dd_state = _tier_fire_diamond_dm_failure_state(_dd_send_exc)
                 if _dd_use_delivery_log:
-                    await asyncio.to_thread(
-                        _release_tier_fire_diamond_dm_sync,
-                        edge_id,
-                        row_version,
-                        _dd_uid,
-                    )
+                    if _dd_state == "retry":
+                        await asyncio.to_thread(
+                            _release_tier_fire_diamond_dm_sync,
+                            edge_id,
+                            row_version,
+                            _dd_uid,
+                        )
+                        _dd_retryable_failure = True
+                    else:
+                        _dd_marked_state = await asyncio.to_thread(
+                            _mark_tier_fire_diamond_dm_status_sync,
+                            edge_id,
+                            row_version,
+                            _dd_uid,
+                            _dd_state,
+                        )
+                        if _dd_state == "unknown" or not _dd_marked_state:
+                            _dd_retryable_failure = True
+                elif _dd_state != "skipped":
+                    _dd_retryable_failure = True
                 log.debug(
                     "_fire_diamond_edge_dms: DM failed for user=%d: %s",
                     _dd_uid, _dd_send_exc,
@@ -26588,6 +26692,7 @@ async def _fire_diamond_edge_dms(
                     _dd_uid,
                 )
                 if not _dd_marked:
+                    _dd_retryable_failure = True
                     log.error(
                         "_fire_diamond_edge_dms: sent DM has ambiguous log state "
                         "edge_id=%s user=%d",

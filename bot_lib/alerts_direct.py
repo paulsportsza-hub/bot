@@ -399,15 +399,33 @@ def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -
 
     try:
         resp.raise_for_status()
+    except _req.exceptions.HTTPError as exc:
+        status_code = getattr(resp, "status_code", None)
+        if status_code is not None and status_code >= 500:
+            log.warning("alerts_direct: sendPhoto ambiguous Telegram 5xx: %s", exc)
+            return ALERTS_SEND_UNKNOWN
+        log.warning("alerts_direct: sendPhoto rejected by Telegram: %s", exc)
+        return None
+
+    try:
         data = resp.json()
-        if not data.get("ok"):
-            log.warning("alerts_direct: Telegram API error: %s", data.get("description", "unknown"))
-            return None
+    except Exception as exc:
+        log.warning("alerts_direct: sendPhoto ambiguous response decode failure: %s", exc)
+        return ALERTS_SEND_UNKNOWN
+
+    if not data.get("ok"):
+        status_code = data.get("error_code")
+        log.warning("alerts_direct: Telegram API error: %s", data.get("description", "unknown"))
+        if isinstance(status_code, int) and status_code >= 500:
+            return ALERTS_SEND_UNKNOWN
+        return None
+
+    try:
         message_id = data["result"]["message_id"]
         return f"{_PUBLISHED_URL_BASE}/{message_id}"
     except Exception as exc:
-        log.warning("alerts_direct: sendPhoto rejected by Telegram: %s", exc)
-        return None
+        log.warning("alerts_direct: sendPhoto ambiguous success payload: %s", exc)
+        return ALERTS_SEND_UNKNOWN
 
 
 async def post_to_alerts(

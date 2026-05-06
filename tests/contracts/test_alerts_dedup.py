@@ -552,7 +552,7 @@ async def test_fire_diamond_edge_dms_does_not_retry_stale_posting_dm(
 
     row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
     ctx = SimpleNamespace(bot=FakeTelegramBot())
-    assert await bot._fire_diamond_edge_dms(
+    assert not await bot._fire_diamond_edge_dms(
         ctx,
         {"match_key": "contract_home_vs_contract_away_2026-05-17"},
         "contract_home_vs_contract_away_2026-05-17",
@@ -625,7 +625,7 @@ async def test_fire_diamond_edge_dms_releases_retryable_send_exception(
 
     class FailingTelegramBot:
         async def send_photo(self, chat_id, photo, reply_markup=None):
-            raise RuntimeError("network before accepted response")
+            raise RuntimeError("definite no send before accepted response")
 
     row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
     ctx = SimpleNamespace(bot=FailingTelegramBot())
@@ -646,6 +646,120 @@ async def test_fire_diamond_edge_dms_releases_retryable_send_exception(
     finally:
         conn.close()
     assert row == (0,)
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_marks_blocked_user_skipped(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    async def fake_diamond_users():
+        return [101]
+
+    async def fake_can_send(user_id):
+        return True
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+    monkeypatch.setattr(bot, "_can_send_notification", fake_can_send)
+
+    class Forbidden(Exception):
+        pass
+
+    class BlockedTelegramBot:
+        async def send_photo(self, chat_id, photo, reply_markup=None):
+            raise Forbidden("bot was blocked by the user")
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    ctx = SimpleNamespace(bot=BlockedTelegramBot())
+    assert await bot._fire_diamond_edge_dms(
+        ctx,
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("skipped",)
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_marks_timeout_unknown_and_blocks(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    async def fake_diamond_users():
+        return [101]
+
+    async def fake_can_send(user_id):
+        return True
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+    monkeypatch.setattr(bot, "_can_send_notification", fake_can_send)
+
+    class TimedOut(Exception):
+        pass
+
+    class TimeoutTelegramBot:
+        async def send_photo(self, chat_id, photo, reply_markup=None):
+            raise TimedOut("timed out after upload")
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    ctx = SimpleNamespace(bot=TimeoutTelegramBot())
+    assert not await bot._fire_diamond_edge_dms(
+        ctx,
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("unknown",)
 
 
 @pytest.mark.asyncio
@@ -734,6 +848,53 @@ async def test_final_mark_revalidates_sent_row_version(monkeypatch, tmp_path):
                 "UPDATE edge_results SET recommended_odds = 2.15, "
                 "bookmaker = 'betway', predicted_ev = 0.12"
             )
+            conn.commit()
+        finally:
+            conn.close()
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (0, None)
+
+
+@pytest.mark.asyncio
+async def test_final_mark_revalidates_unsettled_result(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+            }
+        ],
+    )
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("UPDATE edge_results SET result = 'hit'")
             conn.commit()
         finally:
             conn.close()
@@ -1147,6 +1308,33 @@ def test_post_sync_classifies_known_no_send_failures(monkeypatch):
 
     monkeypatch.setattr(requests, "post", lambda *args, **kwargs: RejectedResponse())
     assert alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []}) is None
+
+    class ServerErrorResponse:
+        status_code = 502
+
+        def raise_for_status(self):
+            raise requests.exceptions.HTTPError("502")
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: ServerErrorResponse())
+    assert (
+        alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []})
+        == alerts_direct.ALERTS_SEND_UNKNOWN
+    )
+
+    class BadJsonResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("truncated response")
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: BadJsonResponse())
+    assert (
+        alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []})
+        == alerts_direct.ALERTS_SEND_UNKNOWN
+    )
 
 
 @pytest.mark.asyncio
