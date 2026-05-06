@@ -152,3 +152,16 @@ Spec: `reference/ROLE-EDGE-AUDITOR.md`. Loads: `CLAUDE.md` + `ME-Core.md` + `ops
 Coding agents dispatched by any lead do NOT load this CLAUDE.md. They receive a self-contained brief with all context embedded.
 
 **Pre-draft duplicate-check (28 Apr 2026):** before drafting ANY new brief, the dispatcher does a quick Pipeline DS + Briefs DB search for adjacent in-flight or recently-closed work. Surface duplicates to the requester before writing.
+
+---
+
+### Locked Rule Anchors (contract-test machine-readable)
+
+### Rule 13 — Canonical QA Gallery commit discipline (locked 2026-04-28, OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01)
+Canonical writes are atomic-commit-only. See `.githooks/pre-commit` and `scripts/canonical_lane_check.sh`.
+
+### Rule 19 — AI Breakdown reader filters empty narrative_html (locked 2026-04-28, FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01)
+`card_data.build_ai_breakdown_data()` must filter rows where `narrative_html` is empty/NULL. Locked by FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01.
+
+### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers (locked 2026-04-28, FIX-PREGEN-COVERAGE-DIAMOND-01)
+W82 rows are valid for all tiers on the read surface. Premium W82 write-refusal (FIX-PREGEN-COVERAGE-DIAMOND-01) governs the write path only. Locked by FIX-PREGEN-COVERAGE-DIAMOND-01.

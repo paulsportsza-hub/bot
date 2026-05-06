@@ -4207,12 +4207,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             )
         elif action == "cancel":
             _subscribe_state.pop(query.from_user.id, None)
-            await _serve_response(
-                query,
-                "👍 No worries — you can subscribe any time via /subscribe.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-                ]),
+            user_tier = await get_effective_tier(query.from_user.id)
+            text, markup = _subscribe_plan_text(user_tier)
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="sub_plans.html",
+                data=build_sub_plans_data(user_tier, _founding_days_left(), await db.get_remaining_founding_slots()),
+                text_fallback=text,
+                markup=markup,
+                message_to_edit=query.message,
             )
         elif action == "plans":
             user_tier = await get_effective_tier(query.from_user.id)
