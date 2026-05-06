@@ -2042,15 +2042,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ht_page_state[user_id] = 0
                 _ht_tips_snapshot[user_id] = _tier_rendered
             else:
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await ctx.bot.send_message(
-                    query.message.chat_id,
-                    _tier_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=_tier_markup,
+                _tier_empty_data = build_edge_picks_empty_data()
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_picks_empty.html", data=_tier_empty_data,
+                    text_fallback=_tier_text, markup=_tier_markup,
+                    message_to_edit=query.message,
                 )
         elif action.startswith("back"):
             # W84-HT2: hot:back:{page} — return to the exact page the user came from.
