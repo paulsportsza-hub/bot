@@ -2199,7 +2199,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _tier_lock_markup = InlineKeyboardMarkup([
                         [InlineKeyboardButton(
                             f"{_tier_lock_emoji} Upgrade to {_upg_requested_tier.title()} — View Plans",
-                            callback_data="sub:plans",
+                            callback_data=f"sub:tier:{_upg_requested_tier}_monthly",
                         )],
                         [InlineKeyboardButton(
                             "↩️ Back",
@@ -2238,7 +2238,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _lock_markup = InlineKeyboardMarkup([
                         [InlineKeyboardButton(
                             f"{_upg_tier_emoji} Upgrade to {_upg_edge_tier.title()}",
-                            callback_data="sub:plans",
+                            callback_data=f"sub:tier:{_upg_edge_tier}_monthly",
                         )],
                         [InlineKeyboardButton(
                             "↩️ Back",
@@ -2631,7 +2631,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _mme_lock_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton(
                     f"💎 Unlock {_mme_tier_pretty}",
-                    callback_data="sub:plans",
+                    callback_data=f"sub:tier:{_mme_edge_tier}_monthly",
                 )],
                 [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
             ])
@@ -2649,7 +2649,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             log.warning("tier_lock_upsell (mme) failed: %s", _mme_lock_err)
         # fallback: text-based lock message
         _mme_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("📋 View Plans", callback_data=f"sub:tier:{_mme_edge_tier}_monthly")],
             [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
         ])
         _mme_text = f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>\n\nUpgrade to view the full pick analysis."
@@ -4075,7 +4075,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _bg_markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton(
                         "💎 Upgrade to Diamond — from R199/mo",
-                        callback_data="sub:plans",
+                        callback_data="sub:tier:diamond_monthly",
                     )],
                     [InlineKeyboardButton("↩️ Back", callback_data=_bg_back_cb)],
                 ])
@@ -4096,7 +4096,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 await _serve_response(
                     query, "🔒 Diamond Edge — upgrade to unlock.",
                     InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                        [InlineKeyboardButton("✨ View Plans", callback_data="sub:tier:diamond_monthly")],
                         [InlineKeyboardButton("↩️ Back", callback_data=_bg_back_cb)],
                     ]),
                 )
@@ -4584,7 +4584,7 @@ async def handle_menu(query, action: str) -> None:
             _lock_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton(
                     f"{_lock_tier_emoji} Upgrade to {_wpl_tier.title()} — from R199/mo",
-                    callback_data="sub:plans",
+                    callback_data=f"sub:tier:{_wpl_tier}_monthly",
                 )],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ])
@@ -4601,7 +4601,7 @@ async def handle_menu(query, action: str) -> None:
             log.warning("pick_lock upsell failed: %s", _wpl_lock_err)
             await _serve_response(
                 query, "🔒 Upgrade to unlock this Edge.",
-                InlineKeyboardMarkup([[InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")]]),
+                InlineKeyboardMarkup([[InlineKeyboardButton("✨ View Plans", callback_data=f"sub:tier:{_wpl_tier}_monthly")]]),
             )
 
     elif action == "help":

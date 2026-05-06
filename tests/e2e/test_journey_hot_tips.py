@@ -235,5 +235,8 @@ async def test_hot_upgrade_dispatch_returns_view_plans_and_back(
     assert call["template"] == "tier_lock_upsell.html"
     markup = call["markup"]
     callbacks = _callbacks(markup)
-    assert "sub:plans" in callbacks
+    # FIX-TIER-LOCK-CTA-01: CTA must route to tier-specific checkout, not generic plans
+    assert any(cb.startswith("sub:tier:") and cb.endswith("_monthly") for cb in callbacks), (
+        f"Expected a sub:tier:*_monthly callback but got: {callbacks}"
+    )
     assert "hot:go" in callbacks  # FIX-LOCKED-TIER-CARD-UX-01: back → tier picker

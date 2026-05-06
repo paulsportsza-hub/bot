@@ -152,3 +152,15 @@ Spec: `reference/ROLE-EDGE-AUDITOR.md`. Loads: `CLAUDE.md` + `ME-Core.md` + `ops
 Coding agents dispatched by any lead do NOT load this CLAUDE.md. They receive a self-contained brief with all context embedded.
 
 **Pre-draft duplicate-check (28 Apr 2026):** before drafting ANY new brief, the dispatcher does a quick Pipeline DS + Briefs DB search for adjacent in-flight or recently-closed work. Surface duplicates to the requester before writing.
+
+---
+
+## Locked Operational Rules
+
+**OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01** (LOCKED 28 Apr 2026): Canonical image writes (`static/qa-gallery/canonical/`) must be atomic-commit-only — never mixed with code or ops files in the same commit. Pre-commit hook enforces this via `scripts/canonical_lane_check.sh`. Emergency override: `ALLOW_CANONICAL_MIX=1` (audit-trailed, with warning).
+
+### Rule 19 — AI Breakdown reader filters empty narrative_html
+**FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01** (LOCKED): The AI Breakdown card reader (`card_data.py`, `bot.py`) must filter out matches where `narrative_html` is empty, None, or whitespace-only before display. Rows with empty `narrative_html` fall back to the instant-baseline path rather than showing a blank breakdown. This guard prevents blank AI Breakdown cards reaching users.
+
+### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers
+**FIX-PREGEN-COVERAGE-DIAMOND-01** (LOCKED): The pregen coverage SELECT (`narrative_source in ("w82", "baseline_no_edge")`) is tier-agnostic — rows with `edge_tier` of gold, silver, bronze, and diamond are ALL eligible. The coverage query must NOT issue an UPDATE that restricts rows to a specific tier subset. Diamond and gold rows produced by w82/baseline_no_edge are valid pregen cache entries and must be served to users on those tiers.
