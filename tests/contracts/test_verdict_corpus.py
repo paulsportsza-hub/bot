@@ -754,6 +754,45 @@ def test_render_verdict_routes_diamond_rich_spec_to_v2(monkeypatch) -> None:
     assert vc.render_verdict(spec) == expected.text
 
 
+def test_render_verdict_routes_diamond_production_shape_to_v2(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec(
+        edge_tier="diamond",
+        match_key="liverpool_diamond_v2_8",
+        recommended_team="",
+    )
+    ctx = vc._spec_to_verdict_context(spec)
+    expected = vc.verdict_engine_v2.render_verdict_v2(ctx)
+
+    assert ctx.recommended_team == spec.outcome_label
+    assert expected.valid
+    assert len(expected.text) < 100
+    assert "full stake" in expected.text.lower()
+    assert vc.render_verdict(spec) == expected.text
+
+
+def test_v2_adapter_uses_verdict_action_tier_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec(
+        edge_tier="",
+        verdict_action="strong back",
+        recommended_team="",
+        match_key="strong_back_v2_action_fallback_1",
+    )
+    ctx = vc._spec_to_verdict_context(spec)
+    expected = vc.verdict_engine_v2.render_verdict_v2(ctx)
+
+    assert ctx.tier == "diamond"
+    assert expected.valid
+    assert "full stake" in expected.text.lower()
+    assert "light stake" not in expected.text.lower()
+    assert vc.render_verdict(spec) == expected.text
+
+
 def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch) -> None:
     monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
     importlib.reload(vc)

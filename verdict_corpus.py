@@ -91,6 +91,23 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
+_VERDICT_ACTION_TIER_FALLBACKS = {
+    "strong back": "diamond",
+    "back": "gold",
+    "lean": "silver",
+}
+_VERDICT_TIERS = frozenset(("diamond", "gold", "silver", "bronze"))
+
+
+def _tier_for_spec(spec: "NarrativeSpec") -> str:
+    tier = _text_or_empty(getattr(spec, "edge_tier", "")).strip().lower()
+    if tier in _VERDICT_TIERS:
+        return tier
+
+    action = _text_or_empty(getattr(spec, "verdict_action", "")).strip().lower()
+    return _VERDICT_ACTION_TIER_FALLBACKS.get(action, "bronze")
+
+
 def _odds_for_v2(value: Any) -> str | float | None:
     if value in (None, ""):
         return None
@@ -135,6 +152,36 @@ def _mapping_or_none(value: Any, field_name: str) -> Mapping[str, Any] | None:
     if not isinstance(value, Mapping):
         raise TypeError(f"{field_name} must be a mapping or None; got {type(value).__name__}")
     return value
+
+
+def _has_explicit_v2_context(spec: "NarrativeSpec") -> bool:
+    raw_signals = getattr(spec, "signals", None)
+    if isinstance(raw_signals, Mapping) and bool(raw_signals):
+        return True
+
+    for field_name in (
+        "match_key",
+        "edge_revision",
+        "recommended_at",
+        "evidence_pack",
+        "home_form",
+        "away_form",
+        "h2h",
+        "h2h_summary",
+        "venue",
+        "coach",
+        "nickname",
+        "bookmaker_count",
+        "line_movement_direction",
+        "tipster_sources_count",
+    ):
+        value = getattr(spec, field_name, None)
+        if field_name in ("bookmaker_count", "tipster_sources_count") and value == 0:
+            continue
+        if value not in (None, "", [], {}):
+            return True
+
+    return False
 
 
 def _signals_for_v2(raw: Any) -> dict[str, Any]:
@@ -212,7 +259,7 @@ def _spec_to_verdict_context(spec: "NarrativeSpec") -> verdict_engine_v2.Verdict
         "outcome_label": _text_or_empty(getattr(spec, "outcome_label", "")),
         "odds": _odds_for_v2(getattr(spec, "odds", None)),
         "bookmaker": _text_or_none(getattr(spec, "bookmaker", None)),
-        "tier": _text_or_empty(getattr(spec, "edge_tier", "")),
+        "tier": _tier_for_spec(spec),
         "kickoff_utc": _text_or_none(getattr(spec, "kickoff_utc", None)),
         "signals": _signals_for_v2(raw_signals),
         "evidence_pack": _mapping_or_none(getattr(spec, "evidence_pack", None), "evidence_pack"),
@@ -237,11 +284,16 @@ def _spec_to_verdict_context(spec: "NarrativeSpec") -> verdict_engine_v2.Verdict
     )
 
 
-def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
-    if len(text) < 100:
+def _v2_render_boundary_miss(
+    text: str,
+    spec: "NarrativeSpec",
+    ctx: verdict_engine_v2.VerdictContext,
+) -> str | None:
+    explicit_v2_context = _has_explicit_v2_context(spec)
+    if not explicit_v2_context and len(text) < 100:
         return "below_min_verdict_quality"
 
-    tier = _text_or_empty(getattr(spec, "edge_tier", "")).lower()
+    tier = _text_or_empty(getattr(ctx, "tier", None) or getattr(spec, "edge_tier", "")).lower()
     if tier == "diamond":
         diamond_tokens = [
             "hammer",
@@ -253,7 +305,7 @@ def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
             "standard-to-heavy",
             "full confident stake",
         ]
-        if _text_or_none(getattr(spec, "recommended_team", None)):
+        if explicit_v2_context:
             diamond_tokens.append("full stake")
         if not any(token in text.lower() for token in diamond_tokens):
             return "missing_diamond_conviction_language"
@@ -1178,7 +1230,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             ctx = _spec_to_verdict_context(spec)
             result = verdict_engine_v2.render_verdict_v2(ctx)
             if result and getattr(result, "valid", False) and getattr(result, "text", ""):
-                boundary_miss = _v2_render_boundary_miss(result.text, spec)
+                boundary_miss = _v2_render_boundary_miss(result.text, spec, ctx)
                 if boundary_miss is None:
                     return result.text
                 _log_v2_event(
@@ -1207,16 +1259,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             )
             # Fall through to the legacy path below.
 
-    tier = (getattr(spec, "edge_tier", "") or "").lower()
-    if tier not in VERDICT_CORPUS:
-        # Action-derived fallback when edge_tier is empty/unrecognised.
-        action = (getattr(spec, "verdict_action", "") or "").lower()
-        derived = {
-            "strong back": "diamond",
-            "back": "gold",
-            "lean": "silver",
-        }.get(action, "bronze")
-        tier = derived
+    tier = _tier_for_spec(spec)
 
     # ── BUILD-VERDICT-SIGNAL-MAPPED-01 main path ───────────────────────────
     if _signal_mapped_enabled():
