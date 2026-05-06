@@ -182,15 +182,25 @@ def _coach_for_v2(spec: "NarrativeSpec", recommended_team: str) -> str | None:
 
 def _spec_to_verdict_context(spec: "NarrativeSpec") -> verdict_engine_v2.VerdictContext:
     recommended_team = _recommended_team_for_v2(spec)
-    match_key = _text_or_empty(getattr(spec, "match_key", ""))
+    explicit_match_key = _text_or_empty(getattr(spec, "match_key", "")).strip()
+    reconstructed_match_key = "|".join(
+        part
+        for part in (
+            _text_or_empty(getattr(spec, "home_name", "")).strip(),
+            _text_or_empty(getattr(spec, "away_name", "")).strip(),
+        )
+        if part
+    )
+    match_key = explicit_match_key or reconstructed_match_key
     edge_revision = _first_text(
         getattr(spec, "edge_revision", None),
         getattr(spec, "recommended_at", None),
         match_key,
     )
-    raw_signals = getattr(spec, "signals", {})
-    if not raw_signals:
-        raw_signals = _spec_to_signals(spec)
+    raw_native_signals = getattr(spec, "signals", {})
+    if raw_native_signals:
+        _signals_for_v2(raw_native_signals)
+    raw_signals = _spec_to_signals(spec)
     values = {
         "match_key": match_key,
         "edge_revision": edge_revision,
@@ -233,7 +243,7 @@ def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
 
     tier = _text_or_empty(getattr(spec, "edge_tier", "")).lower()
     if tier == "diamond":
-        diamond_tokens = (
+        diamond_tokens = [
             "hammer",
             "load up",
             "go in heavy",
@@ -242,7 +252,9 @@ def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
             "heavy stake",
             "standard-to-heavy",
             "full confident stake",
-        )
+        ]
+        if _text_or_none(getattr(spec, "recommended_team", None)):
+            diamond_tokens.append("full stake")
         if not any(token in text.lower() for token in diamond_tokens):
             return "missing_diamond_conviction_language"
 
@@ -255,6 +267,32 @@ def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
         return "missing_recommendation_bookmaker"
 
     return None
+
+
+def _log_v2_event(
+    event: str,
+    spec: "NarrativeSpec",
+    *,
+    reason: str,
+    ctx: verdict_engine_v2.VerdictContext | None = None,
+    result: verdict_engine_v2.VerdictResult | None = None,
+    exc: Exception | None = None,
+    level: int = logging.INFO,
+) -> None:
+    log.log(
+        level,
+        event,
+        extra={
+            "event": event,
+            "match_key": getattr(ctx, "match_key", None) or getattr(spec, "match_key", "<missing>"),
+            "edge_revision": getattr(ctx, "edge_revision", None) or getattr(spec, "edge_revision", None),
+            "tier": getattr(ctx, "tier", None) or getattr(spec, "edge_tier", None),
+            "reason": reason,
+            "primary_fact_type": getattr(result, "primary_fact_type", None),
+            "validation_errors": getattr(result, "validation_errors", ()),
+            "error": repr(exc) if exc is not None else None,
+        },
+    )
 
 
 # ── BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03) feature flag ────────────────
@@ -1135,6 +1173,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     ``edge_tier`` still get a tier-appropriate verdict.
     """
     if _USE_V2:
+        ctx: verdict_engine_v2.VerdictContext | None = None
         try:
             ctx = _spec_to_verdict_context(spec)
             result = verdict_engine_v2.render_verdict_v2(ctx)
@@ -1142,21 +1181,29 @@ def render_verdict(spec: "NarrativeSpec") -> str:
                 boundary_miss = _v2_render_boundary_miss(result.text, spec)
                 if boundary_miss is None:
                     return result.text
-                log.info(
-                    "VERDICT_V2_FALL_THROUGH match_key=%s reason=%s",
-                    getattr(spec, "match_key", "<missing>"),
-                    boundary_miss,
+                _log_v2_event(
+                    "VERDICT_V2_FALL_THROUGH",
+                    spec,
+                    reason=boundary_miss,
+                    ctx=ctx,
+                    result=result,
                 )
             else:
-                log.info(
-                    "VERDICT_V2_FALL_THROUGH match_key=%s reason=invalid_or_empty_v2_result",
-                    getattr(spec, "match_key", "<missing>"),
+                _log_v2_event(
+                    "VERDICT_V2_FALL_THROUGH",
+                    spec,
+                    reason="invalid_or_empty_v2_result",
+                    ctx=ctx,
+                    result=result,
                 )
         except Exception as exc:
-            log.warning(
-                "VERDICT_V2_RENDER_FAIL match_key=%s reason=%r",
-                getattr(spec, "match_key", "<missing>"),
-                exc,
+            _log_v2_event(
+                "VERDICT_V2_RENDER_FAIL",
+                spec,
+                reason="exception",
+                ctx=ctx,
+                exc=exc,
+                level=logging.WARNING,
             )
             # Fall through to the legacy path below.
 

@@ -43,6 +43,7 @@ builder has its own contract suite at ``test_verdict_signal_mapper.py``.
 from __future__ import annotations
 
 import importlib
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -82,6 +83,7 @@ class _MockSpec:
     recommended_team: str = ""
     home_name: str = ""
     away_name: str = ""
+    ev_pct: float = 0.0
     composite_score: float = 0.0
     support_level: int = 0
     contradicting_signals: int = 0
@@ -105,6 +107,8 @@ class _MockSpec:
     bookmaker_count: int | None = None
     line_movement_direction: str | None = None
     tipster_sources_count: int | None = None
+    tipster_available: bool = False
+    tipster_agrees: bool | None = None
 
 
 # Realistic slot-fill spread:
@@ -678,6 +682,7 @@ def _v2_ready_spec(**overrides) -> _MockSpec:
         "away_name": "Chelsea",
         "odds": 1.96,
         "bookmaker": "SuperSportBet",
+        "ev_pct": 4.2,
         "composite_score": 82,
         "support_level": 4,
         "match_key": "liverpool_vs_chelsea_v2_route_1",
@@ -732,6 +737,23 @@ def test_render_verdict_routes_to_v2_when_flag_default(monkeypatch) -> None:
     assert vc.render_verdict(spec) == expected.text
 
 
+def test_render_verdict_routes_diamond_rich_spec_to_v2(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec(
+        edge_tier="diamond",
+        match_key="liverpool_diamond_v2_4",
+        recommended_team="Liverpool",
+    )
+    ctx = vc._spec_to_verdict_context(spec)
+    expected = vc.verdict_engine_v2.render_verdict_v2(ctx)
+
+    assert expected.valid
+    assert "full stake" in expected.text.lower()
+    assert vc.render_verdict(spec) == expected.text
+
+
 def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch) -> None:
     monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
     importlib.reload(vc)
@@ -741,7 +763,7 @@ def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch) -> None:
     assert vc.render_verdict(spec) == _legacy_expected_for(spec)
 
 
-def test_v2_routing_falls_back_to_legacy_when_v2_returns_invalid(monkeypatch) -> None:
+def test_v2_routing_falls_back_to_legacy_when_v2_returns_invalid(monkeypatch, caplog) -> None:
     monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
     importlib.reload(vc)
 
@@ -754,17 +776,56 @@ def test_v2_routing_falls_back_to_legacy_when_v2_returns_invalid(monkeypatch) ->
     )
     monkeypatch.setattr(vc.verdict_engine_v2, "render_verdict_v2", lambda _ctx: invalid)
 
-    assert vc.render_verdict(spec) == _legacy_expected_for(spec)
+    with caplog.at_level(logging.INFO):
+        assert vc.render_verdict(spec) == _legacy_expected_for(spec)
+
+    record = next(
+        rec for rec in caplog.records
+        if getattr(rec, "event", "") == "VERDICT_V2_FALL_THROUGH"
+    )
+    assert record.match_key == spec.match_key
+    assert record.edge_revision == spec.edge_revision
+    assert record.tier == spec.edge_tier
+    assert record.reason == "invalid_or_empty_v2_result"
+    assert record.primary_fact_type == "test_invalid"
 
 
 def test_v2_adapter_edge_revision_fallback_chain() -> None:
     explicit = _v2_ready_spec(edge_revision="edge-rev-7", recommended_at="rec-1")
     recommended = _v2_ready_spec(edge_revision="", recommended_at="rec-2")
     match_key = _v2_ready_spec(edge_revision="", recommended_at="")
+    reconstructed = _v2_ready_spec(
+        edge_revision="",
+        recommended_at="",
+        match_key="",
+        home_name="Liverpool",
+        away_name="Chelsea",
+    )
 
     assert vc._spec_to_verdict_context(explicit).edge_revision == "edge-rev-7"
     assert vc._spec_to_verdict_context(recommended).edge_revision == "rec-2"
     assert vc._spec_to_verdict_context(match_key).edge_revision == match_key.match_key
+    assert vc._spec_to_verdict_context(reconstructed).match_key == "Liverpool|Chelsea"
+    assert vc._spec_to_verdict_context(reconstructed).edge_revision == "Liverpool|Chelsea"
+
+
+def test_v2_adapter_applies_native_signal_polarity_gates() -> None:
+    non_positive_ev = _v2_ready_spec(ev_pct=0, signals={"price_edge": True})
+    tipster_disagrees = _v2_ready_spec(
+        signals={"tipster": True},
+        tipster_available=True,
+        tipster_agrees=False,
+    )
+    picked_side_injured = _v2_ready_spec(
+        outcome="home",
+        signals={"injury": True},
+        injuries_home=["starter out"],
+        injuries_away=[],
+    )
+
+    assert vc._spec_to_verdict_context(non_positive_ev).signals["price_edge"] is False
+    assert vc._spec_to_verdict_context(tipster_disagrees).signals["tipster"] is False
+    assert vc._spec_to_verdict_context(picked_side_injured).signals["lineup_injury"] is False
 
 
 # ── Concern-prefix concatenation cleanliness (preserved from W82) ─────────
