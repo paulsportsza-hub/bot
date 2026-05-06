@@ -407,6 +407,109 @@ async def test_diamond_retry_existing_channel_send_does_not_duplicate_dm(
 
 
 @pytest.mark.asyncio
+async def test_final_mark_revalidates_sent_row_version(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+            }
+        ],
+    )
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("UPDATE edge_results SET bet_type = 'Away Win'")
+            conn.commit()
+        finally:
+            conn.close()
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (0, None)
+
+
+@pytest.mark.asyncio
+async def test_diamond_new_channel_send_dms_even_when_mark_race_loses(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE edge_results SET edge_tier = 'diamond'")
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+                "display_tier": "diamond",
+                "edge_tier": "diamond",
+            }
+        ],
+    )
+
+    dms: list[str] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("UPDATE edge_results SET bet_type = 'Away Win'")
+            conn.commit()
+        finally:
+            conn.close()
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    async def fake_fire_diamond_edge_dms(ctx, tip, match_key):
+        dms.append(match_key)
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert dms == ["contract_home_vs_contract_away_2026-05-17"]
+
+
+@pytest.mark.asyncio
 async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_path):
     import bot
     import bot_lib.alerts_direct as alerts_direct
@@ -644,6 +747,33 @@ async def test_post_to_alerts_keeps_unknown_reservation_on_ambiguous_send(
     finally:
         conn.close()
     assert row == ("unknown",)
+
+
+def test_post_sync_classifies_known_no_send_failures(monkeypatch):
+    import requests
+    import bot_lib.alerts_direct as alerts_direct
+
+    def read_timeout(*args, **kwargs):
+        raise requests.exceptions.ReadTimeout("response lost")
+
+    monkeypatch.setattr(requests, "post", read_timeout)
+    assert (
+        alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []})
+        == alerts_direct.ALERTS_SEND_UNKNOWN
+    )
+
+    def connection_error(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("not sent")
+
+    monkeypatch.setattr(requests, "post", connection_error)
+    assert alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []}) is None
+
+    class RejectedResponse:
+        def raise_for_status(self):
+            raise requests.exceptions.HTTPError("401")
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: RejectedResponse())
+    assert alerts_direct._post_sync("token", b"png", "", {"inline_keyboard": []}) is None
 
 
 @pytest.mark.asyncio

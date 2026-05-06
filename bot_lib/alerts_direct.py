@@ -365,6 +365,14 @@ def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -
     try:
         files = {"photo": ("card.png", io.BytesIO(png_bytes), "image/png")}
         resp = _req.post(api_url, data=payload, files=files, timeout=30)
+    except _req.exceptions.ReadTimeout as exc:
+        log.warning("alerts_direct: sendPhoto ambiguous read timeout: %s", exc)
+        return ALERTS_SEND_UNKNOWN
+    except _req.exceptions.RequestException as exc:
+        log.warning("alerts_direct: sendPhoto request failed before accepted response: %s", exc)
+        return None
+
+    try:
         resp.raise_for_status()
         data = resp.json()
         if not data.get("ok"):
@@ -373,8 +381,8 @@ def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -
         message_id = data["result"]["message_id"]
         return f"{_PUBLISHED_URL_BASE}/{message_id}"
     except Exception as exc:
-        log.warning("alerts_direct: sendPhoto failed: %s", exc)
-        return ALERTS_SEND_UNKNOWN
+        log.warning("alerts_direct: sendPhoto rejected by Telegram: %s", exc)
+        return None
 
 
 async def post_to_alerts(

@@ -26127,8 +26127,17 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     ", posted_to_alerts_direct_claimed_at = NULL "
                     ", posted_to_alerts_direct_claim_id = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
-                    "AND posted_to_alerts_direct_claim_id = ?",
-                    (_tfa_edge_id, _tfa_claim_id),
+                    "AND posted_to_alerts_direct_claim_id = ? "
+                    "AND recommended_at = ? "
+                    "AND edge_tier = ? "
+                    "AND bet_type = ?",
+                    (
+                        _tfa_edge_id,
+                        _tfa_claim_id,
+                        _tfa_row.get("recommended_at") or "",
+                        _tfa_tier,
+                        _tfa_row.get("bet_type") or "",
+                    ),
                     retries=10,
                     backoff_ms=500,
                 )
@@ -26136,6 +26145,15 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     log.warning(
                         "_tier_fire_alerts_job: mark skipped for edge_id=%s; state changed before mark",
                         _tfa_edge_id,
+                    )
+                    _db_write_retry(
+                        "UPDATE edge_results SET posted_to_alerts_direct_claimed_at = NULL "
+                        ", posted_to_alerts_direct_claim_id = NULL "
+                        "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
+                        "AND posted_to_alerts_direct_claim_id = ?",
+                        (_tfa_edge_id, _tfa_claim_id),
+                        retries=5,
+                        backoff_ms=200,
                     )
                 else:
                     _tfa_marked_ok = True
@@ -26145,7 +26163,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     _tfa_edge_id, _tfa_mark_exc,
                 )
             # AC-E: Diamond edges also DM active Diamond subscribers personally.
-            if _tfa_tier == "diamond" and _tfa_new_channel_send and _tfa_marked_ok:
+            if _tfa_tier == "diamond" and _tfa_new_channel_send:
                 await _fire_diamond_edge_dms(ctx, _tfa_tip, _tfa_mk)
         else:
             try:
