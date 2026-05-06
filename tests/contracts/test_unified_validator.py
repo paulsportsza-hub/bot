@@ -565,8 +565,8 @@ def test_caller_quarantines_non_premium_major(caplog) -> None:
     # If the BANNED_NARRATIVE_PHRASES gate fires, MAJOR fail → quarantine.
     if insert_params:
         params = insert_params[0]
-        # last param is _quality_status_override
-        assert params[-1] == "quarantined", f"params tail: {params[-3:]}"
+        # penultimate param is _quality_status_override; engine_version is appended last.
+        assert params[-2] == "quarantined", f"params tail: {params[-4:]}"
         assert any(
             "FIX-NARRATIVE-ROT-ROOT-01 BaselineQuarantined" in msg
             for msg in caplog.messages

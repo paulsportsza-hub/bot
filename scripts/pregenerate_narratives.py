@@ -350,6 +350,7 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
         "verdict_validated",     # NARRATIVE-ACCURACY-01
         "setup_attempts",        # NARRATIVE-ACCURACY-01
         "verdict_attempts",      # NARRATIVE-ACCURACY-01
+        "engine_version",        # BUILD-VERDICT-V2-CACHE-CUTOVER-AND-AUDIT-02
     },
     "shadow_narratives": {
         "match_key",
@@ -789,6 +790,7 @@ async def _drift_checked_persist(pw: dict) -> tuple[bool, str]:
             spec_json=pw.get("spec_json"),
             context_json=pw.get("context_json"),
             generation_ms=pw.get("generation_ms"),
+            engine_version=pw.get("engine_version"),
         )
         return True, ""
     except Exception as exc:
@@ -2169,6 +2171,7 @@ async def _generate_one(
 
     # Verdict_html: deterministic _render_verdict only — no LLM.
     _verdict_html = None
+    _verdict_engine_version = None
     _evidence_class = None
     _tone_band = None
     _spec_json_str = None
@@ -2178,12 +2181,15 @@ async def _generate_one(
         _tone_band = getattr(spec, "tone_band", None)
         try:
             from verdict_corpus import render_verdict as _rv_det
+            from verdict_corpus import get_last_engine_version as _rv_engine_version
             _verdict_html = _rv_det(spec)
+            _verdict_engine_version = _rv_engine_version()
             if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
                 _bv_action = getattr(spec, "verdict_action", "back") or "back"
                 _bv_outcome = getattr(spec, "outcome_label", "") or "this outcome"
                 _bv_odds = getattr(spec, "odds", 0) or 0
                 _verdict_html = f"{_bv_action.title()} — {_bv_outcome} at {_bv_odds:.2f}. Edge confirmed."
+                _verdict_engine_version = None
             if _verdict_html and len(_verdict_html) > 300:
                 _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
             log.info("VERDICT-W82: rendered for %s (deterministic)", match_key)
@@ -2266,6 +2272,7 @@ async def _generate_one(
             "coverage_json": _coverage_json,
             "structured_card_json": _structured_card_json,
             "verdict_html": _verdict_html,
+            "engine_version": _verdict_engine_version,
             "evidence_class": _evidence_class,
             "tone_band": _tone_band,
             "spec_json": _spec_json_str,
@@ -2862,7 +2869,13 @@ if __name__ == "__main__":
         "--dry-run", action="store_true", default=False,
         help="Print what would be generated without writing to cache",
     )
+    parser.add_argument(
+        "--active-only", action="store_true", default=False,
+        help="Alias for the active uncached-only sweep used by cutover runbooks",
+    )
     args = parser.parse_args()
+    if args.active_only:
+        args.sweep = "uncached_only"
 
     # W81-HEALTH: PID lock — prevent concurrent pregen instances
     import fcntl as _fcntl

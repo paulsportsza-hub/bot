@@ -41,6 +41,7 @@ import hashlib
 import logging
 import os
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -52,7 +53,15 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type hints
 
 _log = logging.getLogger(__name__)
 log = logging.getLogger(__name__)
-_USE_V2 = os.environ.get("VERDICT_ENGINE_V2", "1") not in ("0", "false", "False", "no", "")
+_V2_FLAG_FALSE_VALUES = {"0", "false", "no", "off", ""}
+_USE_V2 = (
+    os.environ.get("VERDICT_ENGINE_V2", "1").strip().lower()
+    not in _V2_FLAG_FALSE_VALUES
+)
+_last_engine_version: ContextVar[str | None] = ContextVar(
+    "verdict_corpus_last_engine_version",
+    default=None,
+)
 
 
 # Legacy fallback only. V2 lives in verdict_engine_v2.
@@ -60,6 +69,11 @@ _USE_V2 = os.environ.get("VERDICT_ENGINE_V2", "1") not in ("0", "false", "False"
 # Corpus data structures below are reachable only when VERDICT_ENGINE_V2=0
 # OR when V2 returns invalid/empty (defence-in-depth).
 # Do not extend this corpus for new verdict work.
+
+
+def get_last_engine_version() -> str | None:
+    """Return provenance for the most recent render in this context."""
+    return _last_engine_version.get()
 
 
 _V2_SIGNAL_ALIASES: dict[str, str] = {
@@ -248,6 +262,23 @@ def _spec_to_verdict_context(spec: "NarrativeSpec") -> verdict_engine_v2.Verdict
     if raw_native_signals:
         _signals_for_v2(raw_native_signals)
     raw_signals = _spec_to_signals(spec)
+    _has_explicit_price_signal = (
+        isinstance(raw_native_signals, Mapping) and "price_edge" in raw_native_signals
+    )
+    if (
+        recommended_team
+        and _odds_text_for_boundary(getattr(spec, "odds", None))
+        and not _has_explicit_price_signal
+    ):
+        raw_signals = {
+            **raw_signals,
+            "price_edge": True,
+            "line_mvt": False,
+            "market": False,
+            "tipster": False,
+            "form": False,
+            "injury": False,
+        }
     values = {
         "match_key": match_key,
         "edge_revision": edge_revision,
@@ -319,6 +350,37 @@ def _v2_render_boundary_miss(
         return "missing_recommendation_bookmaker"
 
     return None
+
+
+def _with_v2_recommendation_anchor(
+    text: str,
+    ctx: verdict_engine_v2.VerdictContext,
+) -> str:
+    odds = _odds_text_for_boundary(getattr(ctx, "odds", None))
+    bookmaker = _text_or_none(getattr(ctx, "bookmaker", None))
+    if (not odds or odds in text) and (not bookmaker or bookmaker.lower() in text.lower()):
+        return text
+
+    team = _first_text(
+        getattr(ctx, "recommended_team", None),
+        getattr(ctx, "outcome_label", None),
+        "the pick",
+    )
+    price_bits = [team]
+    if odds:
+        price_bits.append(f"at {odds}")
+    if bookmaker:
+        price_bits.append(f"with {bookmaker}")
+    if "—" in text:
+        lead, tail = text.split("—", 1)
+        if lead.strip().lower().startswith(team.strip().lower()):
+            anchored_body = tail.strip()
+        else:
+            anchored_body = text.strip()
+    else:
+        anchored_body = text.strip()
+    anchored = f"{' '.join(price_bits)} — {anchored_body}"
+    return anchored if len(anchored) <= 200 else text
 
 
 def _log_v2_event(
@@ -1224,22 +1286,34 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     so legacy callers that build a NarrativeSpec without populating
     ``edge_tier`` still get a tier-appropriate verdict.
     """
+    _last_engine_version.set(None)
     if _USE_V2:
         ctx: verdict_engine_v2.VerdictContext | None = None
         try:
             ctx = _spec_to_verdict_context(spec)
             result = verdict_engine_v2.render_verdict_v2(ctx)
             if result and getattr(result, "valid", False) and getattr(result, "text", ""):
-                boundary_miss = _v2_render_boundary_miss(result.text, spec, ctx)
-                if boundary_miss is None:
-                    return result.text
-                _log_v2_event(
-                    "VERDICT_V2_FALL_THROUGH",
-                    spec,
-                    reason=boundary_miss,
-                    ctx=ctx,
-                    result=result,
-                )
+                if getattr(result, "fallback", False):
+                    _log_v2_event(
+                        "VERDICT_V2_FALL_THROUGH",
+                        spec,
+                        reason="v2_fallback_shell",
+                        ctx=ctx,
+                        result=result,
+                    )
+                else:
+                    v2_text = _with_v2_recommendation_anchor(result.text, ctx)
+                    boundary_miss = _v2_render_boundary_miss(v2_text, spec, ctx)
+                    if boundary_miss is None:
+                        _last_engine_version.set("v2_microfact")
+                        return v2_text
+                    _log_v2_event(
+                        "VERDICT_V2_FALL_THROUGH",
+                        spec,
+                        reason=boundary_miss,
+                        ctx=ctx,
+                        result=result,
+                    )
             else:
                 _log_v2_event(
                     "VERDICT_V2_FALL_THROUGH",
@@ -1259,6 +1333,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             )
             # Fall through to the legacy path below.
 
+    _last_engine_version.set("legacy")
     tier = _tier_for_spec(spec)
 
     # ── BUILD-VERDICT-SIGNAL-MAPPED-01 main path ───────────────────────────

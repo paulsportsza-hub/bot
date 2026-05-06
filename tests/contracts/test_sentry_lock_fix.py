@@ -45,7 +45,8 @@ def _create_runtime_tables(db_path: Path, *, include_narrative_source: bool = Tr
             setup_validated INTEGER DEFAULT 1,
             verdict_validated INTEGER DEFAULT 1,
             setup_attempts INTEGER DEFAULT 1,
-            verdict_attempts INTEGER DEFAULT 1
+            verdict_attempts INTEGER DEFAULT 1,
+            engine_version TEXT
         )
         """
     )

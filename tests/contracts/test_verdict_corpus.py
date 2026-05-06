@@ -734,7 +734,85 @@ def test_render_verdict_routes_to_v2_when_flag_default(monkeypatch) -> None:
     expected = vc.verdict_engine_v2.render_verdict_v2(ctx)
 
     assert expected.valid
-    assert vc.render_verdict(spec) == expected.text
+    rendered = vc.render_verdict(spec)
+    assert vc.get_last_engine_version() == "v2_microfact"
+    assert vc.verdict_engine_v2.validate_verdict(rendered, ctx) == ()
+    assert vc.verdict_engine_v2.validate_team_integrity(rendered, ctx) == []
+    assert "Liverpool at 1.96 with SuperSportBet" in rendered
+    assert "standard stake" in rendered.lower()
+
+
+def test_v2_recommendation_anchor_preserves_fact_clause() -> None:
+    ctx = vc.verdict_engine_v2.VerdictContext(
+        match_key="liverpool_vs_chelsea_2026-05-10",
+        edge_revision="rev",
+        sport="soccer",
+        league="epl",
+        home_name="Liverpool",
+        away_name="Chelsea",
+        recommended_team="Liverpool",
+        odds=1.96,
+        bookmaker="SuperSportBet",
+        tier="gold",
+    )
+
+    anchored = vc._with_v2_recommendation_anchor(
+        "Liverpool — the number keeps this live on Liverpool. Back Liverpool, standard stake.",
+        ctx,
+    )
+
+    assert anchored.startswith("Liverpool at 1.96 with SuperSportBet —")
+    assert "the number keeps this live on Liverpool" in anchored
+    assert "Back Liverpool, standard stake." in anchored
+
+
+def test_v2_no_signal_price_context_still_uses_microfact(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec(
+        match_key="liverpool_vs_chelsea_v2_price_only",
+        signals={},
+        ev_pct=0.0,
+        home_form="",
+        away_form="",
+        h2h="",
+        bookmaker_count=0,
+        movement_direction="neutral",
+        support_level=0,
+    )
+
+    rendered = vc.render_verdict(spec)
+
+    assert rendered
+    assert vc.get_last_engine_version() == "v2_microfact"
+    assert "1.96" in rendered
+    assert "SuperSportBet" in rendered
+    assert "price" in rendered.lower() or "number" in rendered.lower() or "quote" in rendered.lower()
+
+
+def test_v2_safe_shell_falls_back_to_legacy_provenance_without_price(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec(
+        match_key="liverpool_vs_chelsea_v2_no_fact_shell",
+        odds=None,
+        bookmaker="",
+        signals={"price_edge": False},
+        ev_pct=0.0,
+        home_form="",
+        away_form="",
+        h2h="",
+        bookmaker_count=0,
+        movement_direction="neutral",
+        support_level=0,
+    )
+
+    rendered = vc.render_verdict(spec)
+
+    assert rendered
+    assert vc.get_last_engine_version() == "legacy"
 
 
 def test_render_verdict_routes_diamond_rich_spec_to_v2(monkeypatch) -> None:
@@ -751,7 +829,12 @@ def test_render_verdict_routes_diamond_rich_spec_to_v2(monkeypatch) -> None:
 
     assert expected.valid
     assert "full stake" in expected.text.lower()
-    assert vc.render_verdict(spec) == expected.text
+    rendered = vc.render_verdict(spec)
+    assert vc.get_last_engine_version() == "v2_microfact"
+    assert vc.verdict_engine_v2.validate_verdict(rendered, ctx) == ()
+    assert vc.verdict_engine_v2.validate_team_integrity(rendered, ctx) == []
+    assert "Liverpool at 1.96 with SuperSportBet" in rendered
+    assert "full stake" in rendered.lower()
 
 
 def test_render_verdict_routes_diamond_production_shape_to_v2(monkeypatch) -> None:
@@ -768,9 +851,14 @@ def test_render_verdict_routes_diamond_production_shape_to_v2(monkeypatch) -> No
 
     assert ctx.recommended_team == spec.outcome_label
     assert expected.valid
-    assert len(expected.text) < 100
+    assert len(expected.text) <= 120
     assert "full stake" in expected.text.lower()
-    assert vc.render_verdict(spec) == expected.text
+    rendered = vc.render_verdict(spec)
+    assert vc.get_last_engine_version() == "v2_microfact"
+    assert vc.verdict_engine_v2.validate_verdict(rendered, ctx) == ()
+    assert vc.verdict_engine_v2.validate_team_integrity(rendered, ctx) == []
+    assert "Liverpool at 1.96 with SuperSportBet" in rendered
+    assert "full stake" in rendered.lower()
 
 
 def test_v2_adapter_uses_verdict_action_tier_fallback(monkeypatch) -> None:
@@ -790,16 +878,24 @@ def test_v2_adapter_uses_verdict_action_tier_fallback(monkeypatch) -> None:
     assert expected.valid
     assert "full stake" in expected.text.lower()
     assert "light stake" not in expected.text.lower()
-    assert vc.render_verdict(spec) == expected.text
+    rendered = vc.render_verdict(spec)
+    assert vc.get_last_engine_version() == "v2_microfact"
+    assert vc.verdict_engine_v2.validate_verdict(rendered, ctx) == ()
+    assert vc.verdict_engine_v2.validate_team_integrity(rendered, ctx) == []
+    assert "Liverpool at 1.96 with SuperSportBet" in rendered
+    assert "full stake" in rendered.lower()
+    assert "light stake" not in rendered.lower()
 
 
-def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch) -> None:
-    monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
+@pytest.mark.parametrize("flag_value", ["0", "false", "no", "off", ""])
+def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch, flag_value: str) -> None:
+    monkeypatch.setenv("VERDICT_ENGINE_V2", flag_value)
     importlib.reload(vc)
 
     spec = _v2_ready_spec()
 
     assert vc.render_verdict(spec) == _legacy_expected_for(spec)
+    assert vc.get_last_engine_version() == "legacy"
 
 
 def test_v2_routing_falls_back_to_legacy_when_v2_returns_invalid(monkeypatch, caplog) -> None:

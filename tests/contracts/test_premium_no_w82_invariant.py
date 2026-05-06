@@ -148,7 +148,8 @@ def _build_in_memory_narrative_db(tmp_path: Path) -> Path:
                 verdict_attempts INTEGER,
                 status TEXT,
                 quarantine_reason TEXT,
-                quality_status TEXT
+                quality_status TEXT,
+                engine_version TEXT
             )
             """
         )

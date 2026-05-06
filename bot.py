@@ -9262,6 +9262,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                     build_narrative_spec as _bns_align,
                 )
                 from verdict_corpus import render_verdict as _ns_render_verdict
+                from verdict_corpus import get_last_engine_version as _ns_last_engine_version
                 _live_tip = dict(enriched)
                 # Ensure tier carries through to _extract_edge_data so
                 # build_narrative_spec()'s TONE-BANDS-FIX block elevates the
@@ -9286,11 +9287,13 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 )
                 _live_spec = _bns_align({}, _live_edge_data, [_live_tip], _live_sport)
                 _fresh = _ns_render_verdict(_live_spec)
+                _fresh_engine_version = _ns_last_engine_version()
                 if _fresh:
                     if _VERDICT_BLACKLIST and any(p in _fresh.lower() for p in _VERDICT_BLACKLIST):
                         log.info("VERDICT_FRESH_BLACKLISTED: %s, dropping", match_key)
                     else:
                         enriched["verdict"] = _cap_verdict(_fresh, limit=_VERDICT_MAX_CHARS)
+                        enriched["verdict_engine_version"] = _fresh_engine_version
             except Exception as _vfe:
                 log.warning("FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01 fresh_render_failed: %s %s", match_key, _vfe)
             if not enriched["verdict"]:
@@ -9300,7 +9303,12 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             # the aligned verdict without re-rendering.
             if enriched["verdict"] and match_key:
                 try:
-                    _store_verdict_cache_sync(match_key, enriched["verdict"], enriched)
+                    _store_verdict_cache_sync(
+                        match_key,
+                        enriched["verdict"],
+                        enriched,
+                        engine_version=enriched.get("verdict_engine_version"),
+                    )
                 except Exception:
                     pass  # Best-effort — don't block card rendering
 
@@ -14116,8 +14124,23 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
 _NARRATIVE_CACHE_TTL = 43200  # 12 hours
 _NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
+_VERDICT_V2_CACHE_ENGINE_VERSION = "v2_microfact"
+_VERDICT_V2_FLAG_FALSE_VALUES = {"0", "false", "no", "off", ""}
 # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: _NARRATIVE_MODEL deleted. The
 # narrative is now deterministic (narrative_spec._render_baseline) — no LLM.
+
+
+def _verdict_engine_v2_enabled() -> bool:
+    return (
+        os.environ.get("VERDICT_ENGINE_V2", "1").strip().lower()
+        not in _VERDICT_V2_FLAG_FALSE_VALUES
+    )
+
+
+def _normalise_cache_engine_version(engine_version: str | None) -> str | None:
+    if str(engine_version or "").strip().lower() == _VERDICT_V2_CACHE_ENGINE_VERSION:
+        return _VERDICT_V2_CACHE_ENGINE_VERSION
+    return None
 
 
 def _ensure_narrative_cache_table() -> None:
@@ -14169,6 +14192,11 @@ def _ensure_narrative_cache_table() -> None:
             conn.execute("ALTER TABLE narrative_cache ADD COLUMN context_json TEXT")
         if "generation_ms" not in cols:
             conn.execute("ALTER TABLE narrative_cache ADD COLUMN generation_ms INTEGER")
+        try:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN engine_version TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         # PIPELINE-BUILD-01: indexes for staleness + tier queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_expires ON narrative_cache(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_tier ON narrative_cache(edge_tier)")
@@ -14399,7 +14427,8 @@ def _compute_odds_hash(match_id: str) -> str:
         ).fetchall()
         if not rows:
             return ""
-        return hashlib.md5(str(rows).encode()).hexdigest()
+        stable_rows = [tuple(row) for row in rows]
+        return hashlib.md5(repr(stable_rows).encode()).hexdigest()
     finally:
         conn.close()
 
@@ -14605,6 +14634,11 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
     def _fetch():
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
+            _v2_cache_filter = _verdict_engine_v2_enabled()
+            _engine_filter = "AND engine_version = ? " if _v2_cache_filter else ""
+            _engine_params = (
+                (_VERDICT_V2_CACHE_ENGINE_VERSION,) if _v2_cache_filter else ()
+            )
             # INV-VERDICT-COACH-FABRICATION-01 + FIX-NARRATIVE-CACHE-DEATH-01: exclude quarantined rows.
             # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: also exclude rows with empty
             # narrative_html so the breakdown surface treats verdict-cache rows
@@ -14615,21 +14649,44 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
                     "FROM narrative_cache WHERE match_id = ? "
+                    + _engine_filter +
                     "AND (status IS NULL OR status != 'quarantined') "
+                    "AND COALESCE(quarantined, 0) = 0 "
+                    "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape')) "
                     "AND narrative_html IS NOT NULL "
                     "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
-                    (match_id,),
+                    (match_id,) + _engine_params,
                 ).fetchone()
-            except sqlite3.OperationalError:
-                # quarantined/status columns may not exist in older DBs
-                row = conn.execute(
-                    "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
-                    "evidence_json, narrative_source, coverage_json, created_at "
-                    "FROM narrative_cache WHERE match_id = ? "
-                    "AND narrative_html IS NOT NULL "
-                    "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
-                    (match_id,),
-                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                # quarantined/status columns may not exist in older DBs.
+                # Under the V2 cache cutover, a weaker compatibility read would
+                # bypass quarantine gates, so treat that as a cache miss.
+                if _v2_cache_filter:
+                    log.warning(
+                        "_get_cached_narrative: refusing V2 cache compatibility read for %s: %s",
+                        match_id,
+                        exc,
+                    )
+                    return None
+                else:
+                    _err = str(exc).lower()
+                    _missing_legacy_gate = (
+                        "no such column" in _err
+                        and any(
+                            column in _err
+                            for column in ("status", "quarantined", "quality_status")
+                        )
+                    )
+                    if not _missing_legacy_gate:
+                        raise
+                    row = conn.execute(
+                        "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
+                        "evidence_json, narrative_source, coverage_json, created_at "
+                        "FROM narrative_cache WHERE match_id = ? "
+                        "AND narrative_html IS NOT NULL "
+                        "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
+                        (match_id,),
+                    ).fetchone()
             if not row:
                 return None
             html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json, created_at_raw = row
@@ -15028,6 +15085,7 @@ async def _store_narrative_cache(
     verdict_validated: int | None = None,
     setup_attempts: int | None = None,
     verdict_attempts: int | None = None,
+    engine_version: str | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -15042,6 +15100,8 @@ async def _store_narrative_cache(
     import sqlite3
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
+
+    engine_version = _normalise_cache_engine_version(engine_version)
 
     # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Rule 24 premium-W82 refusal lifted.
     # W82 baseline is now the canonical narrative for ALL tiers (Diamond + Gold +
@@ -15173,7 +15233,7 @@ async def _store_narrative_cache(
             # doesn't generate one. INSERT OR REPLACE would otherwise wipe a verdict
             # stored by _store_verdict_cache_sync on serve-time, causing the verdict to
             # change on re-navigation (different Sonnet call generates different text).
-            nonlocal verdict_html
+            nonlocal verdict_html, engine_version
             if verdict_html is None:
                 try:
                     _ev = conn.execute(
@@ -15182,6 +15242,9 @@ async def _store_narrative_cache(
                     ).fetchone()
                     if _ev and _ev[0]:
                         verdict_html = _ev[0]
+                        # Preserved verdicts are not fresh V2 renders for this write.
+                        # Do not carry a prior v2_microfact tag across new metadata.
+                        engine_version = None
                 except Exception:
                     pass
             conn.execute(
@@ -15191,8 +15254,8 @@ async def _store_narrative_cache(
                 "structured_card_json, verdict_html, evidence_class, tone_band, "
                 "spec_json, context_json, generation_ms, "
                 "setup_validated, verdict_validated, setup_attempts, verdict_attempts, "
-                "quality_status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "quality_status, engine_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
@@ -15214,6 +15277,7 @@ async def _store_narrative_cache(
                     setup_attempts,
                     verdict_attempts,
                     _quality_status_override,
+                    engine_version,
                 ),
             )
             conn.commit()
@@ -15245,8 +15309,8 @@ async def _store_narrative_cache(
                         "structured_card_json, verdict_html, evidence_class, tone_band, "
                         "spec_json, context_json, generation_ms, "
                         "setup_validated, verdict_validated, setup_attempts, verdict_attempts, "
-                        "quality_status) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "quality_status, engine_version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             match_id, html, model, edge_tier,
                             json.dumps(tips, default=str),
@@ -15268,6 +15332,7 @@ async def _store_narrative_cache(
                             setup_attempts,
                             verdict_attempts,
                             _quality_status_override,
+                            engine_version,
                         ),
                     )
                     conn.commit()
@@ -15381,20 +15446,43 @@ def _get_cached_verdict(match_key: str) -> dict | None:
     try:
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
-            row = conn.execute(
-                "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
-                "created_at, expires_at, tips_json, quality_status "
-                "FROM narrative_cache WHERE match_id = ?",
-                (match_key,),
-            ).fetchone()
+            _v2_cache_filter = _verdict_engine_v2_enabled()
+            _engine_filter = " AND engine_version = ?" if _v2_cache_filter else ""
+            _engine_params = (
+                (_VERDICT_V2_CACHE_ENGINE_VERSION,) if _v2_cache_filter else ()
+            )
+            _quarantined = 0
+            try:
+                row = conn.execute(
+                    "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
+                    "created_at, expires_at, tips_json, quality_status, status, "
+                    "COALESCE(quarantined, 0) "
+                    "FROM narrative_cache WHERE match_id = ?" + _engine_filter,
+                    (match_key,) + _engine_params,
+                ).fetchone()
+                if row:
+                    _quarantined = int(row[9] or 0)
+            except sqlite3.OperationalError as exc:
+                if "quarantined" not in str(exc).lower():
+                    raise
+                row = conn.execute(
+                    "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
+                    "created_at, expires_at, tips_json, quality_status, status "
+                    "FROM narrative_cache WHERE match_id = ?" + _engine_filter,
+                    (match_key,) + _engine_params,
+                ).fetchone()
             if not row or not row[0]:
                 return None
             # Reject verdicts that failed quality gates during pregeneration —
             # quality_status='skipped_banned_shape' means the stored verdict_html
             # is from a partial/failed polish attempt and will be too short or incoherent.
-            if row[7] == "skipped_banned_shape":
+            if (
+                row[7] in ("skipped_banned_shape", "quarantined")
+                or row[8] == "quarantined"
+                or _quarantined
+            ):
                 log.debug(
-                    "_get_cached_verdict: rejecting skipped_banned_shape for %s", match_key
+                    "_get_cached_verdict: rejecting quarantined verdict for %s", match_key
                 )
                 return None
             # NOTE: _VERDICT_MIN_CHARS floor is NOT applied here. verdict_html in
@@ -15465,7 +15553,12 @@ def _is_verdict_stale(cached: dict) -> bool:
         return True
 
 
-def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict) -> None:
+def _store_verdict_cache_sync(
+    match_key: str,
+    verdict_html: str,
+    tip_data: dict,
+    engine_version: str | None = None,
+) -> None:
     """PIPELINE-BUILD-01: Store verdict in narrative_cache. Synchronous, best-effort.
 
     Updates verdict_html column on existing row (from pregenerate or narrative cache).
@@ -15483,6 +15576,12 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
     from narrative_spec import min_verdict_quality
     if not match_key or not verdict_html:
         return
+    if engine_version is None and isinstance(tip_data, dict):
+        engine_version = (
+            tip_data.get("engine_version")
+            or tip_data.get("verdict_engine_version")
+        )
+    engine_version = _normalise_cache_engine_version(engine_version)
 
     # W92-VERDICT-QUALITY P2: pre-write quality gate.
     # Tier is carried in tip_data under several possible keys — normalise to lowercase.
@@ -15591,38 +15690,93 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
     try:
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
-            # Check if row exists
-            existing = conn.execute(
-                "SELECT match_id FROM narrative_cache WHERE match_id = ?",
-                (match_key,),
-            ).fetchone()
+            now = datetime.now(timezone.utc)
+            expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
+            tips_json = json.dumps([tip_data], default=str)
+            odds_hash = _compute_odds_hash(match_key)
+            # Check if row exists, including row-level quarantine markers so a
+            # verdict-only refresh cannot make a quarantined narrative servable.
+            try:
+                existing = conn.execute(
+                    "SELECT match_id, narrative_html, engine_version, quality_status, "
+                    "status, COALESCE(quarantined, 0) "
+                    "FROM narrative_cache WHERE match_id = ?",
+                    (match_key,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "quarantined" not in str(exc).lower():
+                    raise
+                existing = conn.execute(
+                    "SELECT match_id, narrative_html, engine_version, quality_status, "
+                    "status, 0 FROM narrative_cache WHERE match_id = ?",
+                    (match_key,),
+                ).fetchone()
+            write_engine_version = engine_version
+            write_quality_status = _vc_quality_status
             if existing:
-                # Update verdict on existing row; clear skipped_banned_shape so
-                # _get_cached_verdict() serves this fresh verdict next time.
+                _existing_has_narrative = bool(str(existing[1] or "").strip())
+                _existing_engine_version = _normalise_cache_engine_version(existing[2])
+                _existing_quality_status = str(existing[3] or "").strip().lower()
+                _existing_status = str(existing[4] or "").strip().lower()
+                try:
+                    _existing_quarantined = int(existing[5] or 0)
+                except (TypeError, ValueError):
+                    _existing_quarantined = 0
+                _existing_narrative_quarantined = (
+                    _existing_has_narrative
+                    and (
+                        _existing_quality_status in ("quarantined", "skipped_banned_shape")
+                        or _existing_status == "quarantined"
+                        or _existing_quarantined
+                    )
+                )
+                if (
+                    _existing_has_narrative
+                    and engine_version == _VERDICT_V2_CACHE_ENGINE_VERSION
+                    and _existing_engine_version != _VERDICT_V2_CACHE_ENGINE_VERSION
+                ):
+                    write_engine_version = _existing_engine_version
+                if _existing_narrative_quarantined and write_quality_status is None:
+                    write_quality_status = _existing_quality_status or "quarantined"
+                # Update verdict on existing row; preserve row-level narrative
+                # quarantine, otherwise use the fresh verdict validator status.
                 conn.execute(
                     "UPDATE narrative_cache SET verdict_html = ?, "
-                    "quality_status = CASE WHEN quality_status = 'skipped_banned_shape' "
-                    "THEN NULL ELSE quality_status END "
+                    "engine_version = ?, "
+                    "tips_json = ?, "
+                    "odds_hash = ?, "
+                    "created_at = ?, "
+                    "expires_at = ?, "
+                    "quality_status = ? "
                     "WHERE match_id = ?",
-                    (verdict_html, match_key),
+                    (
+                        verdict_html,
+                        write_engine_version,
+                        tips_json,
+                        odds_hash,
+                        now.isoformat(),
+                        expires.isoformat(),
+                        write_quality_status,
+                        match_key,
+                    ),
                 )
             else:
                 # Create minimal row for verdict
-                now = datetime.now(timezone.utc)
-                expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
                 conn.execute(
                     "INSERT OR REPLACE INTO narrative_cache "
                     "(match_id, narrative_html, verdict_html, model, edge_tier, "
-                    "tips_json, odds_hash, narrative_source, created_at, expires_at) "
-                    "VALUES (?, '', ?, 'view-time', ?, ?, ?, 'verdict-cache', ?, ?)",
+                    "tips_json, odds_hash, narrative_source, created_at, expires_at, "
+                    "engine_version) "
+                    "VALUES (?, '', ?, 'view-time', ?, ?, ?, 'verdict-cache', ?, ?, ?)",
                     (
                         match_key,
                         verdict_html,
                         tip_data.get("edge_tier", ""),
-                        json.dumps([tip_data], default=str),
-                        _compute_odds_hash(match_key),
+                        tips_json,
+                        odds_hash,
                         now.isoformat(),
                         expires.isoformat(),
+                        write_engine_version,
                     ),
                 )
             # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-3.
@@ -21754,11 +21908,11 @@ async def _generate_haiku_match_summary(
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                "narrative_source, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "narrative_source, created_at, expires_at, engine_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_key, summary, "haiku-4.5", "bronze", "[]", "",
-                    "haiku_preview", now.isoformat(), expires.isoformat(),
+                    "haiku_preview", now.isoformat(), expires.isoformat(), None,
                 ),
             )
             conn.commit()
@@ -30732,11 +30886,24 @@ def _count_warm_narratives() -> int:
         from db_connection import get_connection as _wc_get_connection
         conn = _wc_get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
         try:
+            _v2_cache_filter = _verdict_engine_v2_enabled()
+            _engine_filter = "AND engine_version = ? " if _v2_cache_filter else ""
+            _params = (
+                (_PREGEN_WARM_WINDOW_HOURS, _VERDICT_V2_CACHE_ENGINE_VERSION)
+                if _v2_cache_filter
+                else (_PREGEN_WARM_WINDOW_HOURS,)
+            )
             row = conn.execute(
                 "SELECT COUNT(*) FROM narrative_cache "
                 "WHERE created_at > datetime('now', '-' || ? || ' hours') "
-                "AND narrative_source IS NOT NULL",
-                (_PREGEN_WARM_WINDOW_HOURS,),
+                "AND narrative_source IS NOT NULL "
+                + _engine_filter +
+                "AND (status IS NULL OR status != 'quarantined') "
+                "AND COALESCE(quarantined, 0) = 0 "
+                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape')) "
+                "AND narrative_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
+                _params,
             ).fetchone()
             return int(row[0]) if row else 0
         finally:
@@ -30761,12 +30928,22 @@ def _count_uncached_hot_tips(match_keys: list[str]) -> int:
         conn = _uc_get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
         try:
             placeholders = ",".join("?" for _ in match_keys)
+            _v2_cache_filter = _verdict_engine_v2_enabled()
+            _engine_filter = "AND engine_version = ? " if _v2_cache_filter else ""
+            _params = tuple(match_keys) + (
+                (_VERDICT_V2_CACHE_ENGINE_VERSION,) if _v2_cache_filter else ()
+            )
             rows = conn.execute(
                 "SELECT match_id FROM narrative_cache "
                 f"WHERE match_id IN ({placeholders}) "
                 "AND expires_at > CURRENT_TIMESTAMP "
-                "AND COALESCE(quarantined, 0) = 0",
-                tuple(match_keys),
+                + _engine_filter +
+                "AND (status IS NULL OR status != 'quarantined') "
+                "AND COALESCE(quarantined, 0) = 0 "
+                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape')) "
+                "AND narrative_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
+                _params,
             ).fetchall()
             cached = {row[0] for row in rows}
         finally:
