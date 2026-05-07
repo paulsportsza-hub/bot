@@ -248,7 +248,7 @@ All Telethon QA harnesses MUST use `telethon_qa_session` (the dedicated QA test 
 
 **Compliance check (run before every PR that touches tests/ or scripts/):**
 ```bash
-grep -rn 'telethon_session' bot/*.py bot/scripts/ bot/tests/ | grep -v 'save_telethon_session.py' | grep -v '__pycache__' | grep -v 'telethon_qa_session'
+grep -rn 'telethon_session' *.py scripts/ tests/ | grep -v 'save_telethon_session.py' | grep -v '__pycache__' | grep -v 'telethon_qa_session'
 # Must return zero lines.
 ```
 Note: the pre-merge gate does not currently auto-reject bare `telethon_session` references — authoring discipline is the enforcement layer.

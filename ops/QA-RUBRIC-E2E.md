@@ -15,7 +15,7 @@
 ## Pre-run checklist
 
 1. Bot running on canonical path: `ps aux | grep bot.py` → must show `/home/paulsportsza/bot/bot.py`
-2. Telethon session valid: `data/telethon_session.string` exists and non-empty
+2. Telethon session valid: `data/telethon_qa_session.string` exists and non-empty (QA account)
 3. STITCH_MOCK_MODE will be forced True by runner config
 4. ANTHROPIC_API_KEY set (for OCR)
 

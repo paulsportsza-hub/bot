@@ -883,7 +883,7 @@ confirmed and logged at the top of the report:
    per the Escalation Rules (CLAUDE.md) before starting the run.
 
 4. **Telethon session check:** confirm
-   `/home/paulsportsza/bot/data/telethon_session.string` (or the
+   `/home/paulsportsza/bot/data/telethon_qa_session.string` (or the
    session file in use) authenticates against the QA user.
 
 5. **Confirm `/qa` admin access:** send `/qa profile list` — must return
@@ -905,7 +905,7 @@ Existing harness files to read before building new ones:
 - `bot/tests/e2e_telethon.py` — shared connection helpers.
 
 Key patterns to reuse:
-- `StringSession` loaded from `data/telethon_session.string`.
+- `StringSession` loaded from `data/telethon_qa_session.string`.
 - Post-tap verdict reads come from `narrative_cache.narrative_html` keyed
   by `match_id`. The photo card does not carry caption text, so the
   database read IS the verdict of record.
