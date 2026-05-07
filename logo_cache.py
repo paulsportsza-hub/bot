@@ -14,7 +14,8 @@ Public API
 Cache structure
 ---------------
     DB:    bot/data/logo_cache.db  (SQLite via get_connection() — WAL mode)
-    Files: bot/card_assets/logos/team/{sport}/{team_key}.png
+    Files: bot-data-shared/card_assets/logos/team/{sport}/{team_key}.png
+           (shared volume — safe to read from any bot tree, including bot-prod)
 
 Override via env vars for testing:
     LOGO_CACHE_DB  — path to SQLite DB (default: data/logo_cache.db)
@@ -65,9 +66,13 @@ _LOGO_DB: str = os.environ.get(
     str(_BOT_DIR / "data" / "logo_cache.db"),
 )
 
+# Shared volume: neutral location readable from any bot tree (dev OR bot-prod).
+# FIX-LOGO-CACHE-RELATIVE-PATHS-01 — do not revert to _BOT_DIR / "card_assets".
+_SHARED_ASSETS: Path = Path("/home/paulsportsza/bot-data-shared/card_assets")
+
 _LOGO_DIR: Path = Path(os.environ.get(
     "LOGO_CACHE_DIR",
-    str(_BOT_DIR / "card_assets" / "logos" / "team"),
+    str(_SHARED_ASSETS / "logos" / "team"),
 ))
 
 # ── Constants ─────────────────────────────────────────────────────────────────
