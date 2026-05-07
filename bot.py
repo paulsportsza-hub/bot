@@ -32777,8 +32777,9 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
     Uses fcntl.flock(LOCK_EX | LOCK_NB) on the PID file for atomic singleton
     enforcement.  The file descriptor is kept open at module level (_PID_LOCK_FD)
     so the kernel-held lock persists for the lifetime of the process.  On exit
-    (atexit, SIGTERM, SIGINT) the file is removed before the fd is closed, so a
-    racing restart sees an absent file rather than a stale-locked one.
+    (atexit, SIGTERM, SIGINT) the flock is released and the fd is closed; the
+    PID file is left in place so the stable inode is always reused, avoiding the
+    inode-split race that arises when the file is unlinked before the lock drops.
     """
     import atexit
     import fcntl
@@ -32888,11 +32889,13 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
     _PID_LOCK_FD = fd  # keep fd open → lock held for process lifetime
 
     def _cleanup_pid() -> None:
+        # Do NOT unlink the PID file here. Unlinking before releasing the flock
+        # creates a race where a contender already holding an fd to the old inode
+        # can acquire the lock on the unlinked inode while a new process locks a
+        # fresh inode — two processes would both believe they hold the singleton.
+        # Leaving the file in place keeps one stable inode; whoever wins the
+        # flock on that inode is the singleton.
         global _PID_LOCK_FD
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
         if _PID_LOCK_FD is not None:
             try:
                 fcntl.flock(_PID_LOCK_FD, fcntl.LOCK_UN)
