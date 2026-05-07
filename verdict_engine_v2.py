@@ -501,9 +501,14 @@ def _render_candidate(
     # _action_with_price (carries odds + bookmaker). Without this,
     # verdict_corpus._with_v2_recommendation_anchor would prepend
     # `{team} at {odds} with {bookmaker} — ` to the verdict — adding a
-    # second team mention and undoing Approach C.
-    close_with_price = single_mention and is_team_outcome
-    em_dash_action = _capitalise(action_with_price) if close_with_price else action
+    # second team mention and undoing Approach C. Applies to both team-bets
+    # and market-bets (BTTS/Over/Under) — the wrapper triggers regardless.
+    em_dash_action = action
+    if single_mention:
+        if is_team_outcome:
+            em_dash_action = _capitalise(action_with_price)
+        else:
+            em_dash_action = _capitalise(_market_action_with_price(ctx))
 
     if shape == "identity_price_fact_action":
         lead = identity
