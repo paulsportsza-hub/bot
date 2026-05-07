@@ -71,7 +71,7 @@ VENUE_TOKENS = (
     "Etihad",
     "Anfield",
     "Stamford Bridge",
-    "Emirates",
+    "Emirates Stadium",
     "St James' Park",
     "Goodison Park",
     "Selhurst Park",
