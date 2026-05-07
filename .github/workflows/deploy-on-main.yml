@@ -1,7 +1,28 @@
-# deploy-on-main.yml — CI gate that triggers a production deploy on every
-# push to main.
+# deploy-on-main.yml — SSH-based production deploy gate for paulsportsza-hub/bot.
 #
-# Brief: FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01.
+# Original brief: FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01 (T66, 2026-05-07).
+#
+# PUSH TRIGGER DISABLED — OPS-CI-DEPLOY-ON-MAIN-DISABLE-01 (2026-05-07)
+# -----------------------------------------------------------------------
+# The push: trigger was removed because three required GitHub Actions secrets
+# (PROD_HOST, PROD_USER, PROD_SSH_KEY) are not yet configured on this repo,
+# causing every push to main to fail immediately at the ssh-agent setup step.
+# Continuing to fire on push creates noisy failure notifications with zero
+# operational value.
+#
+# workflow_dispatch: is intentionally preserved so this workflow remains
+# visible in the GitHub Actions UI and can be triggered manually once the
+# secrets are provisioned.
+#
+# RE-ENABLE: OPS-CI-DEPLOY-ON-MAIN-RE-ENABLE-01 (queued)
+# --------------------------------------------------------
+# The re-enable brief will:
+#   1. Provision PROD_HOST / PROD_USER / PROD_SSH_KEY secrets on this repo.
+#   2. Ratify whether the deploy script should be invoked from the runner
+#      checkout (via actions/checkout@v4) or from the stable prod path
+#      (/home/paulsportsza/bot-prod/scripts/deploy_bot_prod.sh), rather
+#      than from the dev tree as originally authored.
+#   3. Restore the push: trigger in this file.
 #
 # The deploy itself runs on the box (not in a GitHub-hosted runner) — this
 # workflow SSHes in and invokes scripts/deploy_bot_prod.sh with the pushed
@@ -20,8 +41,6 @@
 name: deploy-on-main
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       sha:
