@@ -32736,6 +32736,41 @@ async def _post_init(app_instance) -> None:
 _PID_LOCK_FD: int | None = None  # module-level so fd stays open (flock held for process lifetime)
 
 
+def _probe_pid_liveness(pid_text: str, *, deadline_secs: float = 0.5) -> bool:
+    """Return True if pid_text names a live process, False if provably dead.
+
+    Bounded by deadline_secs (≤500ms, AC-2). Fails closed: unparseable PID,
+    PermissionError (process exists, different owner), or any unexpected
+    exception all return True so the caller keeps the existing exit-with-error
+    behaviour (AC-3).
+    """
+    import time
+
+    try:
+        pid = int(pid_text)
+    except (ValueError, TypeError):
+        return True  # unparseable → fail closed
+
+    if pid <= 0:
+        return True  # sentinel/corrupt → fail closed
+
+    deadline = time.monotonic() + deadline_secs
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+            return True  # process exists and we can signal it
+        except ProcessLookupError:
+            return False  # process is definitively dead
+        except PermissionError:
+            return True  # process exists, owned by another user → treat as live
+        except OSError as exc:
+            log.warning("Lockfile PID liveness probe inconclusive: %s", exc)
+            return True  # fail closed
+        time.sleep(0.05)
+
+    return True  # deadline exceeded → fail closed
+
+
 def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
     """Ensure only one bot instance runs at a time.
 
@@ -32759,58 +32794,80 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
         raise SystemExit(1)
 
     # Attempt atomic exclusive non-blocking lock.
+    _reclaimed = False
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        # Another process holds the lock.  Read the PID for a helpful message.
+        # Another process holds the lock.  Read the PID, then probe liveness
+        # before giving up — a dead holder means we can reclaim (AC-1/AC-4).
         try:
             existing = os.read(fd, 32).decode().strip()
         except OSError:
             existing = "unknown"
-        os.close(fd)
-        log.error(
-            "Another instance already holds the singleton lock (PID %s). Exiting.",
-            existing,
-        )
-        raise SystemExit(1)
 
-    # We hold the lock.  Check whether a stale PID file from a crashed process
-    # (that never held the flock) listed a still-running bot.py process.
-    try:
-        old_text = os.pread(fd, 32, 0).decode().strip()
-        if old_text:
-            try:
-                old_pid = int(old_text)
-                cmdline_path = f"/proc/{old_pid}/cmdline"
-                if os.path.exists(cmdline_path):
-                    cmdline = open(cmdline_path, "rb").read().decode("utf-8", errors="replace")
-                    if "bot.py" in cmdline:
-                        # Soft PID check says something is running — but we hold the
-                        # flock so that process doesn't.  Log and continue.
-                        log.warning(
-                            "Stale PID file referenced PID %d which appears live "
-                            "(cmdline: %s). Lock acquired; overwriting.",
-                            old_pid,
-                            cmdline[:60].replace("\x00", " "),
-                        )
+        if _probe_pid_liveness(existing):
+            os.close(fd)
+            log.error(
+                "Another instance already holds the singleton lock (PID %s). Exiting.",
+                existing,
+            )
+            raise SystemExit(1)
+
+        # Recorded holder is dead — attempt to reclaim the stale lock (AC-4).
+        log.warning("Reclaiming stale lockfile (recorded PID %s is dead).", existing)
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode())
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as reclaim_exc:
+            os.close(fd)
+            log.error(
+                "Failed to reclaim stale lockfile (recorded PID %s): %s. Exiting.",
+                existing,
+                reclaim_exc,
+            )
+            raise SystemExit(1)
+        _reclaimed = True
+
+    if not _reclaimed:
+        # We hold the lock.  Check whether a stale PID file from a crashed process
+        # (that never held the flock) listed a still-running bot.py process.
+        try:
+            old_text = os.pread(fd, 32, 0).decode().strip()
+            if old_text:
+                try:
+                    old_pid = int(old_text)
+                    cmdline_path = f"/proc/{old_pid}/cmdline"
+                    if os.path.exists(cmdline_path):
+                        cmdline = open(cmdline_path, "rb").read().decode("utf-8", errors="replace")
+                        if "bot.py" in cmdline:
+                            # Soft PID check says something is running — but we hold the
+                            # flock so that process doesn't.  Log and continue.
+                            log.warning(
+                                "Stale PID file referenced PID %d which appears live "
+                                "(cmdline: %s). Lock acquired; overwriting.",
+                                old_pid,
+                                cmdline[:60].replace("\x00", " "),
+                            )
+                        else:
+                            log.info("Stale PID file (PID %d, not bot.py) — overwriting.", old_pid)
                     else:
-                        log.info("Stale PID file (PID %d, not bot.py) — overwriting.", old_pid)
-                else:
-                    log.info("Stale PID file (PID %d, process gone) — overwriting.", old_pid)
-            except (ValueError, OSError):
-                log.info("Corrupt/unreadable PID file — overwriting.")
-    except OSError:
-        pass
+                        log.info("Stale PID file (PID %d, process gone) — overwriting.", old_pid)
+                except (ValueError, OSError):
+                    log.info("Corrupt/unreadable PID file — overwriting.")
+        except OSError:
+            pass
 
-    # Write our PID into the locked file (truncate first).
-    try:
-        os.ftruncate(fd, 0)
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, str(os.getpid()).encode())
-    except OSError as exc:
-        log.error("Failed to write PID file: %s. Exiting.", exc)
-        os.close(fd)
-        raise SystemExit(1)
+        # Write our PID into the locked file (truncate first).
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode())
+        except OSError as exc:
+            log.error("Failed to write PID file: %s. Exiting.", exc)
+            os.close(fd)
+            raise SystemExit(1)
 
     _PID_LOCK_FD = fd  # keep fd open → lock held for process lifetime
 
