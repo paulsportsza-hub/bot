@@ -55,6 +55,21 @@ STARTUP_TIMEOUT="${DEPLOY_STARTUP_TIMEOUT:-30}"
 log() { printf '[deploy %s] %s\n' "$(date -Is)" "$*"; }
 fail() { log "FAIL: $*" >&2; exit "${2:-1}"; }
 
+# Returns the highest numeric prefix across migrations/*.py files in a tree, or 0.
+_schema_version_of() {
+    local tree="$1" migdir highest=0 num f
+    migdir="$tree/migrations"
+    [ -d "$migdir" ] || { echo 0; return; }
+    for f in "$migdir"/[0-9]*.py; do
+        [ -f "$f" ] || continue
+        num=$(basename "$f" | grep -oE '^[0-9]+' || true)
+        num=$(printf '%s' "$num" | sed 's/^0*//')
+        [ -z "$num" ] && continue
+        [ "$num" -gt "$highest" ] 2>/dev/null && highest=$num
+    done
+    echo "$highest"
+}
+
 # === 1. Verify SHA reachable from origin/main =============================
 log "verifying SHA $TARGET_SHA reachable from origin/main"
 git -C "$DEV_TREE" fetch origin --quiet
@@ -131,6 +146,13 @@ mv "$STAGING" "$PROD_TREE"
 # through symlinks unless -L is given, so the SHARED targets are never touched.
 log "applying chmod u-w to non-symlink contents of $PROD_TREE"
 find "$PROD_TREE" -not -type l -exec chmod u-w {} + 2>/dev/null || true
+
+# === 5.5. Record schema_version ===========================================
+# Capture the highest migration number from the deployed SHA so rollback.sh
+# can refuse a rollback to a target that expects a newer schema.
+SCHEMA_VERSION=$(_schema_version_of "$PROD_TREE")
+printf '%s\n' "$SCHEMA_VERSION" > "$SHARED/schema_version"
+log "schema_version ${SCHEMA_VERSION} recorded to $SHARED/schema_version"
 
 if [ "${DEPLOY_SKIP_RESTART:-0}" = "1" ]; then
     log "DEPLOY_SKIP_RESTART=1 — leaving service alone"

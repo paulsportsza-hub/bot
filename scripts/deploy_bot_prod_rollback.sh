@@ -18,11 +18,42 @@ PROD="${DEPLOY_PROD_TREE:-/home/paulsportsza/bot-prod}"
 PREV="${PROD}-prev"
 FAILED="${PROD}-failed"
 STARTUP_TIMEOUT="${DEPLOY_STARTUP_TIMEOUT:-30}"
+SHARED="${DEPLOY_SHARED:-/home/paulsportsza/bot-data-shared}"
 
 log() { printf '[rollback %s] %s\n' "$(date -Is)" "$*"; }
 fail() { log "FAIL: $*" >&2; exit "${2:-1}"; }
 
+# Returns the highest numeric prefix across migrations/*.py files in a tree, or 0.
+_schema_version_of() {
+    local tree="$1" migdir highest=0 num f
+    migdir="$tree/migrations"
+    [ -d "$migdir" ] || { echo 0; return; }
+    for f in "$migdir"/[0-9]*.py; do
+        [ -f "$f" ] || continue
+        num=$(basename "$f" | grep -oE '^[0-9]+' || true)
+        num=$(printf '%s' "$num" | sed 's/^0*//')
+        [ -z "$num" ] && continue
+        [ "$num" -gt "$highest" ] 2>/dev/null && highest=$num
+    done
+    echo "$highest"
+}
+
 [ -d "$PREV" ] || fail "no $PREV to roll back to" 2
+
+# === Schema version guard =================================================
+# Refuse rollback when the target SHA (bot-prod-prev) expects a NEWER schema
+# than what is recorded in the shared data volume. This prevents running old
+# code against a schema that has been migrated forward beyond what it knows.
+if [ -f "$SHARED/schema_version" ]; then
+    CURRENT_SCHEMA=$(tr -d '[:space:]' < "$SHARED/schema_version")
+    TARGET_SCHEMA=$(_schema_version_of "$PREV")
+    if [ "$TARGET_SCHEMA" -gt "$CURRENT_SCHEMA" ] 2>/dev/null; then
+        fail "SCHEMA GUARD FIRED: rollback target expects schema v${TARGET_SCHEMA} but bot-data-shared records v${CURRENT_SCHEMA}. Manual schema audit needed before rollback." 5
+    fi
+    log "schema guard OK: rollback target schema=${TARGET_SCHEMA} current=${CURRENT_SCHEMA}"
+else
+    log "schema_version not found in $SHARED — guard skipped (pre-first-deploy)"
+fi
 
 log "moving current $PROD aside to $FAILED"
 if [ -d "$FAILED" ]; then
