@@ -51,6 +51,13 @@ if ! ./scripts/canonical_lane_check.sh; then
     exit 1
 fi
 
+# === DB BARE-CONNECT GUARD (OPS-DBLOCK-BARE-CONNECT-GREP-GUARD-01) ===
+# Reject any new bare sqlite3.connect() outside canonical helpers.
+# Closes the regression class that produced FIX-DBLOCK-CARD-GEN-DIGEST-STATS-01.
+if ! ./.githooks/db-bare-connect-check.sh; then
+    exit 1
+fi
+
 # === SECRET SCAN: check staged files for hardcoded secrets ===
 STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep -E '\.(py|sh|cfg|ini|yaml|yml|toml|txt|md)$' || true)
 if [ -n "$STAGED" ]; then
