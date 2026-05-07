@@ -223,18 +223,18 @@ def _team_mention_count(verdict: str, team: str) -> int:
     """Count whole-word occurrences of `team` in `verdict` (case-insensitive).
 
     FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 audit gate (≤1× rule).
-    Mirrors the diagnostic in scripts/inv_team_name_repetition_count.py:
-    counts ' win'-suffixed first, falls back to bare-team. Returns the higher
-    count so the gate trips on either form.
+    Counts every bare-team occurrence regardless of suffix form. ' win'-
+    suffixed mentions ('Liverpool win') still match because \\b{team}\\b
+    finds the leading 'Liverpool' word boundary inside 'Liverpool win'.
+    Mixed legacy shapes (e.g., 'Liverpool win — Back Liverpool') count
+    correctly as 2× so the gate trips.
     """
     if not verdict or not team:
         return 0
     haystack = _norm(verdict)
-    with_suffix = _norm(f"{team} win")
     bare = _norm(team)
-    matches_with = len(re.findall(rf"\b{re.escape(with_suffix)}\b", haystack))
-    if matches_with:
-        return matches_with
+    if not bare:
+        return 0
     return len(re.findall(rf"\b{re.escape(bare)}\b", haystack))
 
 
