@@ -337,14 +337,14 @@ The `Mode` flag is **load-bearing** — it determines whether briefs run concurr
 ```
 BRIEF-ID — Descriptive Title YYYY-MM-DD [optional score/metric]
 https://www.notion.so/<page_id>
-NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+NOTION_TOKEN: $NOTION_TOKEN
 Execute this brief.
 ```
 
 Line-by-line spec:
 1. **Line 1** — `BRIEF-ID — Title YYYY-MM-DD [metric]`. BRIEF-ID is the Notion page's brief identifier (e.g. `INVESTIGATE-REGRESS`, `BUILD-HEALTH-CLVBF-WINDOW-01`, `IMG-PW3`). Em dash separator. Date in ISO format. Optional trailing metric like `0.0/10` if the brief scores against a baseline.
 2. **Line 2** — Full Notion URL to the brief page. Must be a live page, not a database row.
-3. **Line 3** — `NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN` — the MzansiEdgeCLI token. Mandatory. Label is exactly `NOTION_TOKEN:` — not `Use notion API token:` (old v3 wording, DEAD).
+3. **Line 3** — `NOTION_TOKEN: $NOTION_TOKEN` — an environment reference resolved by the executor environment. Mandatory. Label is exactly `NOTION_TOKEN:` — not `Use notion API token:` (old v3 wording, DEAD). Never paste the live token value into the dispatch block.
 4. **Line 4** — `Execute this brief.` — literal, exact. Period included. No variations.
 
 **Additional context line (optional, only if required):** If the brief was updated mid-flight or needs a one-line pointer, add ONE extra line INSIDE the code block AFTER `Execute this brief.` (e.g. `Brief was updated 14:20 to include AC6.`). Never add commentary before or outside the 4 canonical lines.
@@ -353,7 +353,7 @@ Line-by-line spec:
 - Each brief gets its own separate bold header + code block pair. Never combine multiple briefs into one block.
 - Number sequentially across the entire dispatch (`[1]`, `[2]`, `[3]` …), not per-type.
 - Full brief content lives on the Notion page. Never reference server file paths in the dispatch. The Notion page IS the brief.
-- The token is NOT a secret from the agent — it's how the agent fetches the Notion page via API. Always include it.
+- The dispatch block must include the `NOTION_TOKEN: $NOTION_TOKEN` env reference, never the live token value.
 - Header must be bold markdown OUTSIDE the code block. If it's inside the block, Paul's paste breaks. Reject before sending.
 
 **Canonical example (single brief):**
@@ -363,7 +363,7 @@ Line-by-line spec:
 ```
 INV-DISPATCH-SYSTEM-DEBUG-SWEEP-01 — Bridge pattern detector audit 2026-05-02
 https://www.notion.so/353d9048d73c8124b28ed86236bd910d
-NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+NOTION_TOKEN: $NOTION_TOKEN
 Execute this brief.
 ```
 
@@ -374,7 +374,7 @@ Execute this brief.
 ```
 INV-EDGE-RANKING-CONCURRENCY-01 — Diamond/Gold ranking instability under load 2026-05-02
 https://www.notion.so/abc123
-NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+NOTION_TOKEN: $NOTION_TOKEN
 Execute this brief.
 ```
 
@@ -383,7 +383,7 @@ Execute this brief.
 ```
 BUILD-CARD-TEMPLATE-MY-MATCHES-01 — My Matches Card Template 2026-05-02
 https://www.notion.so/def456
-NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+NOTION_TOKEN: $NOTION_TOKEN
 Execute this brief.
 ```
 
@@ -392,7 +392,7 @@ Execute this brief.
 ```
 QA-CALL-SITE-MAP-CARD-RENDERER-01 — Map all card_renderer.render() callers 2026-05-02
 https://www.notion.so/ghi789
-NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+NOTION_TOKEN: $NOTION_TOKEN
 Execute this brief.
 ```
 

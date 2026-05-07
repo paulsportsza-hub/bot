@@ -59,8 +59,17 @@ def test_pure_codex_docs_do_not_reference_unsupported_quiet_flag():
     for path in _PURE_CODEX_REVIEW_DOCS:
         text = path.read_text(encoding="utf-8")
         assert "codex --profile xhigh exec" in text
+        assert "--quiet" not in text
         assert "codex exec --quiet" not in text
         assert "codex --profile xhigh exec --quiet" not in text
+
+
+def test_dispatch_docs_use_notion_token_env_reference():
+    text = _DEV_STANDARDS.read_text(encoding="utf-8")
+
+    assert "NOTION_TOKEN: $NOTION_TOKEN" in text
+    assert "ntn_REPLACE_WITH_NOTION_TOKEN" not in text
+    assert "The token is NOT a secret from the agent" not in text
 
 
 def test_spawn_sequence_review_gate_present_on_available_surfaces():

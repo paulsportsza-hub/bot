@@ -732,7 +732,7 @@ Reviewer rotation:
 Review mechanisms:
 - `codex --profile xhigh exec` for Codex reviewing Claude output.
 - Use the server-supported canonical form above; the current CLI does not
-  support `--quiet`.
+  support the retired quiet flag.
 - Claude subprocess/API reviewer for Claude reviewing Codex output, or Cowork
   review queue when the judgement context exceeds a diff.
 - Hybrid selection: code-touching bounded briefs use subprocess/API review;
