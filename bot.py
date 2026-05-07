@@ -32763,7 +32763,7 @@ def _probe_pid_liveness(pid_text: str, *, deadline_secs: float = 0.5) -> bool:
             return False  # process is definitively dead
         except PermissionError:
             return True  # process exists, owned by another user → treat as live
-        except OSError as exc:
+        except (OverflowError, OSError) as exc:
             log.warning("Lockfile PID liveness probe inconclusive: %s", exc)
             return True  # fail closed
         time.sleep(0.05)
@@ -32802,7 +32802,7 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
         # Another process holds the lock.  Read the PID, then probe liveness
         # before giving up — a dead holder means we can reclaim (AC-1/AC-4).
         try:
-            existing = os.read(fd, 32).decode().strip()
+            existing = os.read(fd, 32).decode(errors="replace").strip()
         except OSError:
             existing = "unknown"
 
