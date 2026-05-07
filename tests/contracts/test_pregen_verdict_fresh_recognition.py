@@ -147,14 +147,17 @@ def test_verdict_only_row_remains_missing_for_ai_breakdown(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — full narrative row: _is_verdict_only_warm returns True (verdict_html present)
+# Test 3 — verdict_html present: _is_verdict_only_warm returns True regardless of narrative_html
 # ---------------------------------------------------------------------------
 
-def test_full_narrative_row_is_warm_for_pregen(tmp_path: Path) -> None:
-    """Row with both narrative_html and verdict_html: _is_verdict_only_warm returns True.
+def test_verdict_html_present_is_always_warm_for_pregen(tmp_path: Path) -> None:
+    """_is_verdict_only_warm returns True whenever verdict_html is populated.
 
-    _get_cached_narrative behaviour on full rows is unchanged (existing contract);
-    this test confirms _is_verdict_only_warm does not falsely exclude full rows.
+    Covers a row with BOTH columns populated — the predicate must return True
+    since verdict_html is present. In real execution, such a row would be skipped
+    via _get_cached_narrative before _is_verdict_only_warm is reached; this test
+    asserts the predicate's standalone correctness without implying it covers
+    that execution path.
     """
     db = _make_db(tmp_path)
     _insert_row(
@@ -265,4 +268,38 @@ def test_warm_gate_in_bot_py_recognises_verdict_only_fresh(tmp_path: Path) -> No
     assert uncached == 0, (
         "_count_uncached_hot_tips must return 0 when all match_keys have "
         "V2 verdict-only rows — no needless regeneration triggered"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — _count_warm_narratives counts V2 verdict-only rows (P3 coverage)
+# ---------------------------------------------------------------------------
+
+def test_count_warm_narratives_counts_verdict_only_rows(tmp_path: Path) -> None:
+    """_count_warm_narratives returns > 0 when V2 verdict-only rows exist in window.
+
+    Guards the startup no-hot-tips fallback path (P3 Codex review finding).
+    """
+    db = _make_db(tmp_path)
+    for i in range(3):
+        _insert_row(
+            db,
+            f"match_warm_{i}_2026-05-09",
+            narrative_html="",
+            verdict_html=f"<strong>Team {i}</strong> — Value confirmed.",
+            engine_version="v2_microfact",
+        )
+
+    from bot import _count_warm_narratives
+
+    with (
+        patch.dict(os.environ, {"VERDICT_ENGINE_V2": "1"}),
+        patch("bot._NARRATIVE_DB_PATH", str(db)),
+        patch("bot._NARRATIVE_DB_PATH", str(db)),
+    ):
+        warm = _count_warm_narratives()
+
+    assert warm >= 3, (
+        "_count_warm_narratives must count V2 verdict-only rows so the "
+        "startup warmth check does not incorrectly trigger a pregen sweep"
     )

@@ -133,6 +133,28 @@ async def _is_verdict_only_warm(match_key: str) -> bool:
         return False
 
 
+def _verdict_only_odds_hash(match_key: str) -> str:
+    """Return the stored odds_hash for a v2_microfact verdict-only row, or '' if absent.
+
+    Used by the full-sweep path to detect odds drift on verdict-only rows (P2 guard).
+    Sync because it's called via asyncio.to_thread.
+    """
+    try:
+        from db_connection import get_connection as _gcn
+        conn = _gcn(bot._NARRATIVE_DB_PATH, timeout_ms=2000)
+        try:
+            row = conn.execute(
+                "SELECT odds_hash FROM narrative_cache WHERE match_id = ? "
+                "AND engine_version = ?",
+                (match_key, bot._VERDICT_V2_CACHE_ENGINE_VERSION),
+            ).fetchone()
+            return row[0] if row else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+
+
 # BASELINE-FIX: match-level dedup — tracks matches currently being generated.
 # Prevents the same match being generated twice in concurrent calls to main().
 # Module-level so it persists across multiple main() invocations within a process.
@@ -2587,9 +2609,21 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             cached = await _get_cached_narrative(mk)
             if not cached:
                 if await _is_verdict_only_warm(mk):
-                    skipped_full += 1
-                    log.debug("Pregen skip gate (v2 verdict-only warm): skipping %s", mk)
-                    continue
+                    # P2-GUARD: honour odds-hash drift for verdict-only rows the same
+                    # way the full-narrative path does below, so stale-odds verdicts
+                    # still get regenerated on full sweeps.
+                    try:
+                        _v_hash = await asyncio.to_thread(
+                            lambda: _verdict_only_odds_hash(mk)
+                        )
+                        _current_hash = await asyncio.to_thread(_compute_odds_hash, mk)
+                        if _v_hash and _current_hash and _v_hash == _current_hash:
+                            skipped_full += 1
+                            log.debug("Pregen skip gate (v2 verdict-only warm, hash match): skipping %s", mk)
+                            continue
+                        log.debug("Pregen skip gate (v2 verdict-only): odds drift for %s — regenerating", mk)
+                    except Exception:
+                        pass  # hash unavailable — conservative: allow regeneration
                 filtered_full.append(edge)
                 continue
 
