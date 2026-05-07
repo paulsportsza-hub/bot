@@ -93,6 +93,46 @@ if _missing:
     )
 
 
+async def _is_verdict_only_warm(match_key: str) -> bool:
+    """Return True when a V2 verdict-only row is warm but has no full narrative.
+
+    Pregen uses this to recognise verdict-only fresh rows under V2 — rows with
+    narrative_html='' + verdict_html populated + engine_version='v2_microfact' are
+    already serving verdicts on the card surface and must not be re-generated.
+
+    Returns False under VERDICT_ENGINE_V2=0 to preserve legacy behaviour.
+    AI Breakdown callers use _get_cached_narrative directly; its strict
+    narrative_html check is unchanged (FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01).
+    """
+    if not bot._verdict_engine_v2_enabled():
+        return False
+
+    def _check() -> bool:
+        from db_connection import get_connection as _gcn
+        conn = _gcn(bot._NARRATIVE_DB_PATH, timeout_ms=2000)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM narrative_cache WHERE match_id = ? "
+                "AND engine_version = ? "
+                "AND verdict_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(verdict_html, ''))) > 0 "
+                "AND expires_at > CURRENT_TIMESTAMP "
+                "AND (status IS NULL OR status != 'quarantined') "
+                "AND COALESCE(quarantined, 0) = 0 "
+                "AND (quality_status IS NULL OR quality_status NOT IN "
+                "('quarantined', 'skipped_banned_shape'))",
+                (match_key, bot._VERDICT_V2_CACHE_ENGINE_VERSION),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    try:
+        return await asyncio.to_thread(_check)
+    except Exception:
+        return False
+
+
 # BASELINE-FIX: match-level dedup — tracks matches currently being generated.
 # Prevents the same match being generated twice in concurrent calls to main().
 # Module-level so it persists across multiple main() invocations within a process.
@@ -2313,6 +2353,8 @@ async def _verify_and_fill_cache(
             continue
         cached = await _get_cached_narrative(mk)
         if not cached:
+            if await _is_verdict_only_warm(mk):
+                continue  # V2 verdict-only row exists — not a gap
             gaps.append(edge)
 
     if not gaps:
@@ -2352,7 +2394,7 @@ async def _verify_and_fill_cache(
     still_missing = 0
     for edge in edges:
         mk = edge.get("match_key", "")
-        if mk and not await _get_cached_narrative(mk):
+        if mk and not await _get_cached_narrative(mk) and not await _is_verdict_only_warm(mk):
             still_missing += 1
     coverage = ((len(edges) - still_missing) / len(edges)) * 100
     log.info("Cache coverage after gap fill: %.0f%% (%d/%d)", coverage, len(edges) - still_missing, len(edges))
@@ -2493,6 +2535,10 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             mk = edge.get("match_key", "")
             cached = await _get_cached_narrative(mk)
             if not cached:
+                if await _is_verdict_only_warm(mk):
+                    skipped_refresh += 1
+                    log.debug("Pregen skip gate (v2 verdict-only warm): skipping %s", mk)
+                    continue
                 filtered.append(edge)
                 continue
 
@@ -2540,6 +2586,10 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             mk = edge.get("match_key", "")
             cached = await _get_cached_narrative(mk)
             if not cached:
+                if await _is_verdict_only_warm(mk):
+                    skipped_full += 1
+                    log.debug("Pregen skip gate (v2 verdict-only warm): skipping %s", mk)
+                    continue
                 filtered_full.append(edge)
                 continue
 
