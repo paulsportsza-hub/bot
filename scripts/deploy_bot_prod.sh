@@ -89,6 +89,14 @@ for sub in data reports logs bet_log; do
     ln -s "$SHARED/$sub" "$STAGING/$sub"
 done
 
+# bot.py opens "bot.log" relative to CWD (= bot-prod, read-only after step 6).
+# Symlink it to the shared logs volume so RotatingFileHandler writes succeed.
+# Pre-create the file so the rotation lock-test in RotatingFileHandler.__init__
+# does not fail on first deploy.
+touch "$SHARED/logs/bot.log"
+rm -f "$STAGING/bot.log"
+ln -s "$SHARED/logs/bot.log" "$STAGING/bot.log"
+
 # .venv: symlink to the dev tree's .venv to avoid duplicating ~700 MB per deploy.
 # Trade-off documented in ops/RUNTIME-ISOLATION.md.
 rm -rf "$STAGING/.venv"
@@ -107,7 +115,12 @@ PY
 # === 5. Atomic swap =======================================================
 log "swapping prod tree"
 if [ -d "$PROD_TREE" ]; then
-    rm -rf "$PREV"
+    if [ -d "$PREV" ]; then
+        # Previous PREV was chmod -R u-w'd — restore writability before rm,
+        # otherwise rm leaves a partial tree behind and trips set -e.
+        chmod -R u+w "$PREV" 2>/dev/null || true
+        rm -rf "$PREV"
+    fi
     mv "$PROD_TREE" "$PREV"
 fi
 mv "$STAGING" "$PROD_TREE"
@@ -137,7 +150,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         WAIT_RC=2
         break
     fi
-    if journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
+    # journalctl needs sudo: paulsportsza is not in systemd-journal group, so a
+    # non-sudo invocation only sees user-session logs and misses the system
+    # service entirely. Without sudo this loop times out even when the bot
+    # has emitted Startup Truth normally — exactly the false-rollback hit on
+    # the first cutover of FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01.
+    if sudo -n journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
             | grep -q 'Startup Truth'; then
         WAIT_RC=0
         break

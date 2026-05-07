@@ -79,6 +79,16 @@ grep -rn 'write_text\|write_bytes' --include='*.py' . 2>/dev/null \
     | grep -v 'test_' || true
 end_section
 
+emit_section "logging FileHandler / RotatingFileHandler (relative CWD writes)"
+# These open a file relative to CWD by default — landmine when CWD is the
+# read-only prod tree. Forced into the inventory after FIX-BOT-RUNTIME-
+# WORKTREE-ISOLATION-01 first-deploy hit a PermissionError on bot.log.
+grep -rnE 'RotatingFileHandler|TimedRotatingFileHandler|logging\.FileHandler' \
+    --include='*.py' . 2>/dev/null \
+    | grep -v '/tests/' \
+    | grep -v 'test_' || true
+end_section
+
 emit_section "Path(__file__).parent resolution sites (production code)"
 grep -rn 'Path(__file__).parent' --include='*.py' . 2>/dev/null \
     | grep -v '/tests/' \

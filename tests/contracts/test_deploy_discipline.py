@@ -25,9 +25,15 @@ _CANONICAL_HOSTS = {"mzansiedge-hel1"}
 
 def _running_bot_pid_and_start_time():
     """Return (pid, epoch_start) for the live bot process, or (None, None)."""
+    # ps truncates the cmd column when COLUMNS is unset and stdout is not a
+    # tty; the bot's argv lives at the END of the cmd column, so truncation
+    # can hide "bot.py" entirely. -ww forces unlimited width regardless of
+    # terminal state. (Hit by FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01 — the
+    # bot-prod path is 5 chars longer than bot/, which was enough to push
+    # "bot.py" past the default truncation column.)
     try:
         ps = subprocess.run(
-            ["ps", "-eo", "pid,lstart=,cmd"],
+            ["ps", "-eo", "pid,lstart=,cmd", "-ww"],
             capture_output=True, text=True, check=True, timeout=5,
         )
     except (subprocess.SubprocessError, FileNotFoundError):

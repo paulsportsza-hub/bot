@@ -25,7 +25,12 @@ fail() { log "FAIL: $*" >&2; exit "${2:-1}"; }
 [ -d "$PREV" ] || fail "no $PREV to roll back to" 2
 
 log "moving current $PROD aside to $FAILED"
-rm -rf "$FAILED"
+if [ -d "$FAILED" ]; then
+    # Previous FAILED was chmod -R u-w'd — restore writability before rm,
+    # otherwise rm partial-fails and trips set -e.
+    chmod -R u+w "$FAILED" 2>/dev/null || true
+    rm -rf "$FAILED"
+fi
 mv "$PROD" "$FAILED"
 
 log "promoting $PREV -> $PROD"
@@ -48,7 +53,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         WAIT_RC=2
         break
     fi
-    if journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
+    if sudo -n journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
             | grep -q 'Startup Truth'; then
         WAIT_RC=0
         break
