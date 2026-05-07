@@ -57,6 +57,20 @@ def run_migration(db_path: str | None = None) -> int:
 
     conn.close()
     print(f"[UPDATE] {updated} row(s) rewritten: {_OLD_PREFIX!r} → {_NEW_PREFIX!r}")
+
+    # Post-run verification: warn on ok-status rows whose file does not exist on disk.
+    conn2 = get_connection(db_path=path)
+    missing_rows = conn2.execute(
+        "SELECT team_key, file_path FROM logo_cache WHERE status = 'ok' AND file_path IS NOT NULL"
+    ).fetchall()
+    conn2.close()
+    missing_files = [r[0] for r in missing_rows if not os.path.exists(r[1])]
+    if missing_files:
+        print(f"[WARN]   {len(missing_files)} ok row(s) have missing files on disk: {missing_files}")
+        print(f"[WARN]   Copy logo files to {_NEW_PREFIX!r} before this migration is considered complete.")
+    else:
+        print(f"[OK]     All {len(missing_rows)} ok-status files verified on disk.")
+
     print(f"[DONE]   Migration 0002 complete on {path}")
     return updated
 

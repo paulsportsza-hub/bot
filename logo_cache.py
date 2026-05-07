@@ -194,6 +194,11 @@ def get_logo(team_name: str, sport: str, league: str = "") -> Path | None:
         return None
 
     fp = Path(row["file_path"])
+    # Guard: remap stale dev-tree paths to shared volume (handles old DB restores).
+    _dev_prefix = "/home/paulsportsza/bot/card_assets/"
+    if str(fp).startswith(_dev_prefix):
+        fp = _SHARED_ASSETS / fp.relative_to(_dev_prefix)
+        log.warning("get_logo: remapped dev-tree path to shared volume: %s", fp)
     return fp if fp.exists() else None
 
 

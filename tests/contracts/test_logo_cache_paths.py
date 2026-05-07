@@ -86,6 +86,52 @@ def test_prefetch_writes_shared_path():
         )
 
 
+# ── AC-3 (read guard): get_logo remaps stale dev-tree paths at read time ────
+
+def test_get_logo_remaps_stale_dev_tree_path(tmp_path):
+    """get_logo must remap a stale /bot/card_assets/ DB row to shared volume."""
+    shared_dir = tmp_path / "bot-data-shared" / "card_assets" / "logos" / "team" / "soccer"
+    shared_dir.mkdir(parents=True)
+    fake_logo = shared_dir / "soccer_stale.png"
+    buf = io.BytesIO()
+    import PIL.Image
+    PIL.Image.new("RGBA", (96, 96), (0, 0, 0, 255)).save(buf, "PNG")
+    fake_logo.write_bytes(buf.getvalue())
+
+    db_path = str(tmp_path / "logo_cache.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE logo_cache (
+            team_key TEXT PRIMARY KEY, team_name TEXT NOT NULL,
+            sport TEXT NOT NULL, league TEXT NOT NULL DEFAULT '',
+            file_path TEXT, api_source TEXT,
+            fetched_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending'
+        )
+    """)
+    stale_path = "/home/paulsportsza/bot/card_assets/logos/team/soccer/soccer_stale.png"
+    conn.execute(
+        "INSERT INTO logo_cache VALUES (?,?,?,?,?,?,?,?)",
+        ("soccer_stale", "Stale", "soccer", "", stale_path, "test",
+         "2026-01-01T00:00:00+00:00", "ok"),
+    )
+    conn.commit()
+    conn.close()
+
+    with patch.dict(os.environ, {
+        "LOGO_CACHE_DB": db_path,
+        "LOGO_CACHE_DIR": str(tmp_path / "bot-data-shared" / "card_assets" / "logos" / "team"),
+    }):
+        import logo_cache as lc
+        importlib.reload(lc)
+        # Patch _SHARED_ASSETS to point to tmp_path equivalent
+        monkeydir = tmp_path / "bot-data-shared" / "card_assets"
+        with patch.object(lc, "_SHARED_ASSETS", monkeydir):
+            result = lc.get_logo("stale", "soccer")
+
+    assert result is not None, "get_logo should remap stale path and return valid Path"
+    assert str(result) != stale_path, "Should not return the old dev-tree path"
+
+
 # ── AC-2 (migration): existing dev-tree rows are rewritten ──────────────────
 
 def test_migration_rewrites_dev_tree_rows():
