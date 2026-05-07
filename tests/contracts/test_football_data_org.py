@@ -244,8 +244,9 @@ def test_fetch_returns_empty_on_missing_key():
     """No FOOTBALL_DATA_ORG_KEY env → soft-fail returns {}."""
     from scrapers import football_data_org as fd
     with patch.dict(os.environ, {"FOOTBALL_DATA_ORG_KEY": ""}, clear=False):
-        # Patch connect_odds_db so we don't hit a real DB
-        with patch.object(fd, "connect_odds_db", side_effect=sqlite3.OperationalError("no db")):
+        # Patch both helpers so we don't hit a real DB on either the read or write leg.
+        with patch.object(fd, "connect_odds_db", side_effect=sqlite3.OperationalError("no db")), \
+             patch.object(fd, "connect_odds_db_readonly", side_effect=sqlite3.OperationalError("no db")):
             result = _aiocall(fd.fetch_fixture_meta(
                 "bayern_munich_vs_paris_saint_germain_2026-05-06",
                 "champions_league",
