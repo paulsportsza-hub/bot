@@ -68,7 +68,7 @@ VENUE_TOKENS = (
     # "Wembley Way is busy"). Use "Tottenham Hotspur Stadium" /
     # "Wembley Stadium" — Codex P2/P3 round-3 fix.
     "Old Trafford",
-    "Etihad",
+    "Etihad Stadium",
     "Anfield",
     "Stamford Bridge",
     "Emirates Stadium",
@@ -82,22 +82,22 @@ VENUE_TOKENS = (
     "Bernabeu",
     "Wembley Stadium",
     "Allianz Arena",
-    "Signal Iduna",
+    "Signal Iduna Park",
     "San Siro",
     # SA PSL grounds
     "FNB Stadium",
     "Loftus Versfeld",
     "Orlando Stadium",
-    "Mbombela",
+    "Mbombela Stadium",
     "Moses Mabhida",
     "Athlone Stadium",
     "Dr. Petrus Molemela",
     # IPL grounds
-    "Wankhede",
+    "Wankhede Stadium",
     "Eden Gardens",
-    "Chinnaswamy",
-    "Chepauk",
-    "Arun Jaitley",
+    "M Chinnaswamy",
+    "MA Chidambaram",
+    "Arun Jaitley Stadium",
 )
 # City-suffix dump pattern: ", <Capitalised City>" coming straight after the
 # venue. Detected in addition to VENUE_TOKENS so the audit catches whatever
