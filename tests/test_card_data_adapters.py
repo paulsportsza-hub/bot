@@ -602,7 +602,12 @@ def test_story_quiz_complete_all_off():
 
 # ── FIX-ZERO-TEXT-EMPTY-STATES-01: empty-state card adapters ──────────────────
 
-from card_data_adapters import build_edge_picks_empty_data, build_live_games_empty_data, build_guide_menu_data
+from card_data_adapters import (
+    build_edge_picks_empty_data,
+    build_my_matches_empty_data,
+    build_live_games_empty_data,
+    build_guide_menu_data,
+)
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
@@ -646,6 +651,29 @@ class TestEdgePicksEmptyData:
         d = build_edge_picks_empty_data()
         d["header_logo_b64"] = ""
         html = _render_template("edge_picks_empty.html", d)
+        assert "MzansiEdge" in html
+
+
+class TestMyMatchesEmptyData:
+    def test_required_keys_present(self):
+        d = build_my_matches_empty_data()
+        assert "heading" in d
+        assert "body_text" in d
+        assert "cta_line" in d
+        assert "header_logo_b64" in d
+
+    def test_template_renders(self):
+        d = build_my_matches_empty_data()
+        html = _render_template("my_matches_empty.html", d)
+        assert "MY MATCHES" in html
+        assert d["heading"] in html
+        assert d["body_text"] in html
+        assert d["cta_line"] in html
+
+    def test_template_renders_without_logo(self):
+        d = build_my_matches_empty_data()
+        d["header_logo_b64"] = ""
+        html = _render_template("my_matches_empty.html", d)
         assert "MzansiEdge" in html
 
 

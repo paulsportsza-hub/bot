@@ -96,6 +96,7 @@ LIST_TEMPLATES = {
     "tier_lock_upsell.html",
     # FIX-ZERO-TEXT-EMPTY-STATES-01
     "edge_picks_empty.html",
+    "my_matches_empty.html",
     "live_games_empty.html",
     # FIX-ZERO-TEXT-GUIDE-MENU-01
     "guide_menu.html",

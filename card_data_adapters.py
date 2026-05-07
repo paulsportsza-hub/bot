@@ -1513,6 +1513,19 @@ def build_edge_picks_empty_data() -> dict:
     }
 
 
+def build_my_matches_empty_data() -> dict:
+    """Empty-state card when the user has no scheduled matches."""
+    return {
+        "heading": "No Matches Scheduled",
+        "body_text": (
+            "Your match list is empty right now.\n"
+            "Check back soon as fixtures and tracked games refresh through the day."
+        ),
+        "cta_line": "Tap Edge Picks to see live value spots",
+        "header_logo_b64": _logo(),
+    }
+
+
 def build_live_games_empty_data() -> dict:
     """Empty-state card when user has no active live-game subscriptions — FIX-ZERO-TEXT-EMPTY-STATES-01."""
     return {

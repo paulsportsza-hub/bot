@@ -177,6 +177,7 @@ from card_data_adapters import (
     build_bookmaker_directory_data,
     build_help_data,
     build_edge_picks_empty_data,
+    build_my_matches_empty_data,
     build_live_games_empty_data,
     build_guide_menu_data,
 )
@@ -1941,14 +1942,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 ])
             # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
             _raw_games = _schedule_cache.get(user_id) or await _fetch_schedule_games(user_id)
-            # Fix 3: when the schedule is empty do NOT render a placeholder card
-            # and cache its Telegram file_id — serve the text response directly so
-            # the empty-state file_id is never reused for a future non-empty schedule.
+            # Serve an isolated empty-state template so its file_id cache cannot
+            # collide with future non-empty my_matches.html renders.
             if not _raw_games:
                 try:
-                    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="my_matches_empty.html", data=build_my_matches_empty_data(),
+                        text_fallback=text, markup=markup,
+                        message_to_edit=query.message,
+                    )
                 except Exception as _yg_empty_err:
-                    log.warning("MM yg:all empty-state edit failed for user %s: %s", user_id, _yg_empty_err)
+                    log.warning("MM yg:all empty-state card failed for user %s: %s", user_id, _yg_empty_err)
             else:
                 _edge_info = _get_edge_info_for_games(_raw_games)
                 _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
