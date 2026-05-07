@@ -2344,9 +2344,17 @@ def build_narrative_spec(
         recommended_team=_build_recommended_team(edge_data, home_name, away_name),
         # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01: feed Strategy α.
         # lookup_nickname returns "" for market outcomes / unmapped teams; the
-        # verdict engine treats empty as "no nickname" and falls through to coach.
-        nickname=lookup_nickname(
-            _build_recommended_team(edge_data, home_name, away_name)
+        # verdict engine treats empty as "no nickname" and falls through to
+        # coach. Plumbing is gated on V2_BODY_REFERENCE so flag=false fully
+        # restores the pre-fix lead path (identity_label sees nickname=""
+        # → bare-team only) — Codex P2 round-1 finding.
+        nickname=(
+            lookup_nickname(
+                _build_recommended_team(edge_data, home_name, away_name)
+            )
+            if os.environ.get("V2_BODY_REFERENCE", "true").strip().lower()
+            in ("true", "1", "yes", "on")
+            else ""
         ),
         bet_type_is_team_outcome=_is_team_outcome_bet(edge_data),
         bookmaker=edge_data.get("best_bookmaker", ""),

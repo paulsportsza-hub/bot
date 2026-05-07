@@ -48,25 +48,60 @@ METRIC_LABELS = (
 )
 
 # Tokens that must NEVER surface in a V2 verdict (Phase 4 — venue_reference
-# retired). Captures generic markers ("Stadium", " Park"), the famous EPL
-# grounds, foreign top-flight grounds, and the city-suffix dump pattern that
-# triggered Paul's complaint ("Bloemfontein", "Manchester" prefixed by ", ").
+# retired). Captures generic markers ("Stadium", "Park", "Bowl"), the famous
+# EPL grounds, foreign top-flight grounds, SA PSL grounds, the IPL set, and
+# the city-suffix dump pattern that triggered Paul's complaint
+# ("Bloemfontein", "Manchester" prefixed by ", ").
+#
+# FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 Codex P2 round-1 fix:
+# coverage broadened (Park, Bowl, St James' Park, FNB, Loftus, Wankhede,
+# Ellis, etc.) and matching is case-insensitive — so leaked venue copy can't
+# slip past the hard-zero audit gate by case alone.
 VENUE_TOKENS = (
+    # Generic markers
     "Stadium",
+    "Park",
+    "Bowl",
+    # EPL famous grounds
     "Old Trafford",
     "Etihad",
     "Anfield",
     "Stamford Bridge",
     "Emirates",
+    "St James' Park",
+    "Goodison",
+    "Selhurst",
+    "Tottenham Hotspur Stadium",
+    # Foreign clubs
     "Camp Nou",
     "Bernabéu",
     "Bernabeu",
     "Wembley",
+    "Allianz Arena",
+    "Signal Iduna",
+    "San Siro",
+    # SA PSL grounds
+    "FNB",
+    "Loftus",
+    "Orlando Stadium",
+    "Mbombela",
+    "Moses Mabhida",
+    "Athlone",
+    "Dr. Petrus Molemela",
+    # IPL grounds
+    "Wankhede",
+    "Eden Gardens",
+    "Chinnaswamy",
+    "Chepauk",
+    "Arun Jaitley",
 )
 # City-suffix dump pattern: ", <Capitalised City>" coming straight after the
 # venue. Detected in addition to VENUE_TOKENS so the audit catches whatever
-# venue copy snuck in past the rotation gate.
-VENUE_CITY_SUFFIX_RE = re.compile(r",\s+(Manchester|London|Liverpool|Bloemfontein|Soweto|Johannesburg|Pretoria|Durban|Cape Town)\b")
+# venue copy snuck in past the rotation gate. Case-insensitive.
+VENUE_CITY_SUFFIX_RE = re.compile(
+    r",\s+(Manchester|London|Liverpool|Bloemfontein|Soweto|Johannesburg|Pretoria|Durban|Cape\s+Town|Mumbai|Bengaluru|Bangalore|Chennai|Kolkata|Delhi|Hyderabad|Ahmedabad|Lucknow|Jaipur)\b",
+    re.IGNORECASE,
+)
 
 SPORT_VOCAB_BANS = {
     "soccer": ("powerplay", "wicket", "set-piece", "breakdown", "scrum", "lineout"),
@@ -220,8 +255,38 @@ def _mentions(text: str, team: str) -> bool:
 
 
 def _known_teams_for_row(match_id: str) -> set[str]:
+    """Return team names + nicknames considered "in fixture" for third-team
+    detection.
+
+    FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 Codex P2 fix:
+    Strategy α puts curated nicknames into body / lead copy ("the Blues" for
+    Chelsea, "the Reds" for Liverpool). The TEAM_CATALOG contains shared
+    nicknames (e.g., Auckland "Blues") that previously false-positive-flagged
+    Chelsea verdicts as third-team references. Including the recommended /
+    home / away team's nickname in the allowed set neutralises that.
+    """
     home, away = teams_from_match_key(match_id)
-    return {team for team in (home, away) if team}
+    allowed: set[str] = {team for team in (home, away) if team}
+    try:
+        from narrative_spec import lookup_nickname
+        for team in (home, away):
+            if not team:
+                continue
+            nick = lookup_nickname(team).strip()
+            if nick:
+                allowed.add(nick)
+                # Also add the nickname with the leading "the " stripped
+                # ("Blues" from "the Blues") so single-word substring matches
+                # don't sneak through TEAM_CATALOG checks.
+                bare_nick = re.sub(r"^the\s+", "", nick, flags=re.IGNORECASE)
+                if bare_nick:
+                    allowed.add(bare_nick)
+    except ImportError:
+        # narrative_spec may not be importable in some sandbox audit invocations
+        # (no bot-side deps). Fall back to bare home/away — the worst-case is
+        # a noisy third-team flag, never a false negative.
+        pass
+    return allowed
 
 
 def _recommended_team_for_row(match_id: str, bet_type: str) -> str:
@@ -564,9 +629,15 @@ def audit_database(db_path: str) -> dict[str, int]:
             # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 — venue gate.
             # Any stadium / venue / city-suffix token in the rendered verdict
             # marks the row invalid. Threshold is hard zero — verdict copy must
-            # read like punter language, not a database dump.
+            # read like punter language, not a database dump. Case-insensitive
+            # match (Codex P2 round-1 fix) so 'stadium', 'STADIUM', 'Stadium'
+            # all trip the gate.
             if any(
-                re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", verdict)
+                re.search(
+                    rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])",
+                    verdict,
+                    re.IGNORECASE,
+                )
                 for token in VENUE_TOKENS
             ) or VENUE_CITY_SUFFIX_RE.search(verdict):
                 venue_token_count += 1

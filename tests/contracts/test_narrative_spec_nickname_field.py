@@ -2,17 +2,37 @@
 
 Asserts the dataclass carries the new field with default '', and
 build_narrative_spec populates it via lookup_nickname using the recommended
-team. Verdict_corpus._spec_to_verdict_context already reads getattr(spec,
-'nickname', None) and feeds it to VerdictContext.
+team WHEN V2_BODY_REFERENCE is enabled (gated post Codex P2 round-1 finding —
+flag=false fully restores the pre-fix lead identity path). verdict_corpus.
+_spec_to_verdict_context already reads getattr(spec, 'nickname', None) and
+feeds it to VerdictContext.
 """
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 
 import narrative_spec
 from narrative_spec import NarrativeSpec, build_narrative_spec, lookup_nickname
+
+
+@contextmanager
+def _body_ref_flag(value: str) -> Iterator[None]:
+    """Pin V2_BODY_REFERENCE for the test body — the flag gates whether
+    build_narrative_spec calls lookup_nickname (Codex P2 round-1 fix)."""
+    prev = os.environ.get("V2_BODY_REFERENCE")
+    os.environ["V2_BODY_REFERENCE"] = value
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("V2_BODY_REFERENCE", None)
+        else:
+            os.environ["V2_BODY_REFERENCE"] = prev
 
 
 # ── Dataclass field shape ────────────────────────────────────────────────────
@@ -82,8 +102,8 @@ def _ctx_data(home: str, away: str) -> dict:
 
 def test_build_narrative_spec_populates_nickname_when_known() -> None:
     """Recommended team = Liverpool → spec.nickname = 'the Reds' from
-    bot/data/team_nicknames.json."""
-    with _stub_bot_imports():
+    bot/data/team_nicknames.json. Flag must be on for plumbing to fire."""
+    with _body_ref_flag("true"), _stub_bot_imports():
         spec = build_narrative_spec(
             ctx_data=_ctx_data("Liverpool", "Chelsea"),
             edge_data=_edge_data("Liverpool", "Chelsea", outcome="home"),
@@ -96,7 +116,7 @@ def test_build_narrative_spec_populates_nickname_when_known() -> None:
 def test_build_narrative_spec_leaves_nickname_empty_when_unknown() -> None:
     """An unmapped team returns '' from lookup_nickname, so spec.nickname
     stays empty — the engine then falls through to coach / anaphor."""
-    with _stub_bot_imports():
+    with _body_ref_flag("true"), _stub_bot_imports():
         spec = build_narrative_spec(
             ctx_data=_ctx_data("Some Unknown FC", "Another Mystery"),
             edge_data=_edge_data("Some Unknown FC", "Another Mystery", outcome="home"),
@@ -110,7 +130,7 @@ def test_build_narrative_spec_picks_recommended_not_opposing_nickname() -> None:
     """Recommendation = Chelsea (away) → spec.nickname = 'the Blues' (Chelsea's
     nickname), NOT Liverpool's 'the Reds' even though Liverpool is also in the
     fixture."""
-    with _stub_bot_imports():
+    with _body_ref_flag("true"), _stub_bot_imports():
         spec = build_narrative_spec(
             ctx_data=_ctx_data("Liverpool", "Chelsea"),
             edge_data=_edge_data("Liverpool", "Chelsea", outcome="away"),
@@ -119,6 +139,22 @@ def test_build_narrative_spec_picks_recommended_not_opposing_nickname() -> None:
         )
     assert spec.nickname == "the Blues", (
         f"expected Chelsea's nickname 'the Blues', got {spec.nickname!r}"
+    )
+
+
+def test_build_narrative_spec_flag_off_skips_nickname() -> None:
+    """V2_BODY_REFERENCE=false fully restores pre-fix lead path: spec.nickname
+    stays empty even for a mapped team. Codex P2 round-1 ensures
+    identity_label sees no alias and reverts to bare-team lead."""
+    with _body_ref_flag("false"), _stub_bot_imports():
+        spec = build_narrative_spec(
+            ctx_data=_ctx_data("Liverpool", "Chelsea"),
+            edge_data=_edge_data("Liverpool", "Chelsea", outcome="home"),
+            tips=[],
+            sport="soccer",
+        )
+    assert spec.nickname == "", (
+        f"flag=false should skip nickname plumbing, got {spec.nickname!r}"
     )
 
 
