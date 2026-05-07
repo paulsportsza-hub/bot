@@ -496,21 +496,32 @@ def _render_candidate(
     identity = identity_label(ctx, salt=f"{shape}|{attempt}")
     rendered: str | None
 
+    # Single-mention close path: when V2_SINGLE_MENTION is on, fact_action +
+    # price_fact_action shapes switch from _action (no odds) to
+    # _action_with_price (carries odds + bookmaker). Without this,
+    # verdict_corpus._with_v2_recommendation_anchor would prepend
+    # `{team} at {odds} with {bookmaker} — ` to the verdict — adding a
+    # second team mention and undoing Approach C.
+    close_with_price = single_mention and is_team_outcome
+    em_dash_action = _capitalise(action_with_price) if close_with_price else action
+
     if shape == "identity_price_fact_action":
         lead = identity
         if price_anchor:
             lead = f"{lead} {price_anchor}"
+        # Lead carries price_anchor (no wrapper prepend); close uses
+        # the period-leading capitalised _action.
         rendered = f"{lead} — {fact_clause}. {action}"
     elif shape == "fact_price_action":
         rendered = f"{_capitalise(fact_clause)} — {action_with_price}"
     elif shape == "fact_action":
-        rendered = f"{_capitalise(fact_clause)} — {action}"
+        rendered = f"{_capitalise(fact_clause)} — {em_dash_action}"
     elif shape == "price_fact_action":
         if primary_fact_type == "price_edge":
             secondary = _secondary_fact_clause(ctx, attempt=attempt, name_team=body_name_team)
             if not secondary:
                 return None
-            rendered = f"{_capitalise(fact_clause)} and {secondary} — {action}"
+            rendered = f"{_capitalise(fact_clause)} and {secondary} — {em_dash_action}"
         else:
             if not signal_available(ctx, "price_edge"):
                 return None
@@ -519,7 +530,7 @@ def _render_candidate(
             )
             if not price_clause:
                 return None
-            rendered = f"{_capitalise(price_clause)} and {fact_clause} — {action}"
+            rendered = f"{_capitalise(price_clause)} and {fact_clause} — {em_dash_action}"
     else:
         return None
 

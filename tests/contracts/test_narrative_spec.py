@@ -1425,14 +1425,19 @@ class TestVerdictCoherenceIntegration:
 
     def test_back_verdict_in_length_window(self):
         """BUILD-VERDICT-FLOOR-01 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01:
-        Back verdict renders within the unified [100, 260] window. Target
+        Back verdict renders within the unified [85, 260] window. Target
         soft band is [140, 200] but the new W82 pool can produce shorter
         clean verdicts when team names are short.
+
+        FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 (Approach C): floor
+        relaxed from 100 to 85 because team-less body fact-clauses (anaphor
+        pool, no slot-filled team) are intentionally ~17 chars shorter than
+        the legacy team-named bodies.
         """
         spec = self._spec()
         verdict = _render_verdict(spec)
-        assert 100 <= len(verdict) <= 260, (
-            f"Back verdict outside [100, 260] ({len(verdict)}): {verdict!r}"
+        assert 85 <= len(verdict) <= 260, (
+            f"Back verdict outside [85, 260] ({len(verdict)}): {verdict!r}"
         )
 
     def test_speculative_verdict_in_length_window(self):
@@ -1465,14 +1470,16 @@ class TestVerdictCoherenceIntegration:
     def test_strong_back_verdict_in_length_window(self):
         # BUILD-W82-RIP-AND-REPLACE-01: window relaxed from [140, 200] to
         # [100, 200] to match the deterministic corpus's uniform char band.
+        # FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01: floor relaxed
+        # 100 → 85 — team-less body shortens fact-clauses.
         spec = self._spec(
             verdict_action="strong back", verdict_sizing="confident stake",
             evidence_class="conviction", tone_band="strong",
             ev_pct=16.5, bookmaker_count=5,
         )
         verdict = _render_verdict(spec)
-        assert 100 <= len(verdict) <= 200, (
-            f"Strong back verdict outside [100, 200] ({len(verdict)}): {verdict!r}"
+        assert 85 <= len(verdict) <= 200, (
+            f"Strong back verdict outside [85, 200] ({len(verdict)}): {verdict!r}"
         )
 
     def test_verdict_excludes_risk_clause(self):
