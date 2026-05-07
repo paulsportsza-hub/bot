@@ -140,6 +140,11 @@ fi
 
 # === 7. Restart + readiness wait ==========================================
 log "restarting mzansi-bot.service"
+# Capture an upper-bound restart timestamp BEFORE asking systemd to restart so
+# the readiness scan only matches a Startup Truth emitted by THIS restart.
+# Using a sliding "30 sec ago" window (Codex P1) would falsely succeed if a
+# previous restart's Startup Truth still sat inside the window.
+RESTART_TS=$(date '+%Y-%m-%d %H:%M:%S')
 sudo /bin/systemctl restart mzansi-bot.service
 
 DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT ))
@@ -152,10 +157,9 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     fi
     # journalctl needs sudo: paulsportsza is not in systemd-journal group, so a
     # non-sudo invocation only sees user-session logs and misses the system
-    # service entirely. Without sudo this loop times out even when the bot
-    # has emitted Startup Truth normally — exactly the false-rollback hit on
-    # the first cutover of FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01.
-    if sudo -n journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
+    # service entirely. --since pinned to RESTART_TS so a stale Startup Truth
+    # from the previous run cannot match (Codex P1).
+    if sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null \
             | grep -q 'Startup Truth'; then
         WAIT_RC=0
         break

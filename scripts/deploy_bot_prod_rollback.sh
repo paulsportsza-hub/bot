@@ -43,6 +43,9 @@ if [ "${DEPLOY_SKIP_RESTART:-0}" = "1" ]; then
 fi
 
 log "restarting mzansi-bot.service"
+# RESTART_TS captured pre-restart so the readiness scan only matches the
+# Startup Truth emitted by THIS rollback (Codex P1 — same fix as deploy script).
+RESTART_TS=$(date '+%Y-%m-%d %H:%M:%S')
 sudo /bin/systemctl restart mzansi-bot.service
 
 DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT ))
@@ -53,7 +56,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         WAIT_RC=2
         break
     fi
-    if sudo -n journalctl -u mzansi-bot --since "${STARTUP_TIMEOUT} sec ago" --no-pager 2>/dev/null \
+    if sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null \
             | grep -q 'Startup Truth'; then
         WAIT_RC=0
         break

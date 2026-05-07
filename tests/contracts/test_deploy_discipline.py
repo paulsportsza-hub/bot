@@ -19,7 +19,16 @@ from pathlib import Path
 import pytest
 
 
-_BOT_PY = Path("/home/paulsportsza/bot/bot.py")
+# FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01: live runtime is now bot-prod/bot.py.
+# Comparing the live process to /home/paulsportsza/bot/bot.py (the dev tree)
+# would fail every time someone edits the dev tree, even though the dev edit
+# can no longer affect the runtime. Compare against bot-prod, which is the
+# read-only checkout the service actually loads.
+_BOT_PY_CANDIDATES = (
+    Path("/home/paulsportsza/bot-prod/bot.py"),
+    Path("/home/paulsportsza/bot/bot.py"),  # fallback for non-isolated dev hosts
+)
+_BOT_PY = next((p for p in _BOT_PY_CANDIDATES if p.exists()), _BOT_PY_CANDIDATES[-1])
 _CANONICAL_HOSTS = {"mzansiedge-hel1"}
 
 

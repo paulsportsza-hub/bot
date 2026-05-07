@@ -26948,8 +26948,14 @@ async def _fire_diamond_edge_dms(
         return True
 
     def _dd_render() -> bytes:
+        # FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01: resolve the bot directory from
+        # __file__ rather than hard-coding /home/paulsportsza/bot. The hard-
+        # coded path defeated bot-prod isolation (Codex P1) — when the live
+        # service runs from bot-prod, the line above forced lazy imports of
+        # card_pipeline back through the mutable dev tree.
         import sys as _dd_sys
-        _bd = "/home/paulsportsza/bot"
+        from pathlib import Path as _dd_Path
+        _bd = str(_dd_Path(__file__).resolve().parent)
         if _bd not in _dd_sys.path:
             _dd_sys.path.insert(0, _bd)
         from card_pipeline import render_card_bytes as _rcb  # type: ignore[import]

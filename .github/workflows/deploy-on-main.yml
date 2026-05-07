@@ -40,7 +40,15 @@ jobs:
       - name: Resolve target SHA
         id: sha
         run: |
+          # Validate the SHA before letting it cross into the SSH command
+          # below — workflow_dispatch input is user-controlled, so an
+          # unvalidated value would let a caller inject extra shell tokens
+          # into the remote bash invocation (Codex P2).
           SHA="${{ github.event.inputs.sha || github.sha }}"
+          if ! [[ "$SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+              echo "::error::SHA '$SHA' is not a hex-only 7–40 char string"
+              exit 1
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Deploying SHA: $SHA"
 
