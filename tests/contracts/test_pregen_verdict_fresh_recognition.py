@@ -368,3 +368,77 @@ def test_verdict_only_odds_hash_returns_empty_for_missing_hash(tmp_path: Path) -
         "_verdict_only_odds_hash must return '' when no valid hash is stored — "
         "the full-sweep gate then falls through to regeneration (odds-drift path)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — full-sweep skip condition: hash match → skip fires (P2 path)
+# ---------------------------------------------------------------------------
+
+def test_full_sweep_skip_condition_skips_on_hash_match(tmp_path: Path) -> None:
+    """Skip condition (pregenerate_narratives.py:2620) evaluates True when hashes match.
+
+    Replicates the production logic at pregenerate_narratives.py:2620:
+      if _v_hash and _current_hash and _v_hash == _current_hash: [skip]
+
+    Uses the real _verdict_only_odds_hash DB query so a regression in the
+    helper propagates directly to this assertion.
+    """
+    db = _make_db(tmp_path)
+    _insert_row(
+        db,
+        "match_sk_1_2026-05-09",
+        narrative_html="",
+        verdict_html="<strong>Team A</strong> — Lay the field at 2.30.",
+        engine_version="v2_microfact",
+        odds_hash="sha256_xA9f_stable",
+    )
+
+    from scripts.pregenerate_narratives import _verdict_only_odds_hash
+
+    with patch("bot._NARRATIVE_DB_PATH", str(db)):
+        v_hash = _verdict_only_odds_hash("match_sk_1_2026-05-09")
+
+    current_hash = "sha256_xA9f_stable"  # same as stored — no odds drift
+    skip = bool(v_hash and current_hash and v_hash == current_hash)
+
+    assert skip is True, (
+        "Full-sweep skip condition must be True when stored and computed hashes match — "
+        "verdict-only row must be skipped (P2 hash-match path, pregen_narratives:2620)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — full-sweep skip condition: hash drift → falls through to regen
+# ---------------------------------------------------------------------------
+
+def test_full_sweep_skip_condition_regenerates_on_hash_drift(tmp_path: Path) -> None:
+    """Skip condition (pregenerate_narratives.py:2620) evaluates False when hashes differ.
+
+    Replicates the fall-through path at pregenerate_narratives.py:2624-2627:
+      else: [continue past if-block → filtered_full.append(edge)]
+
+    Ensures stale-odds verdict-only rows are NOT silently skipped on a full sweep.
+    """
+    db = _make_db(tmp_path)
+    _insert_row(
+        db,
+        "match_sk_2_2026-05-09",
+        narrative_html="",
+        verdict_html="<strong>Team B</strong> — Back at 1.95, confirmed edge.",
+        engine_version="v2_microfact",
+        odds_hash="sha256_old_odds_v1",
+    )
+
+    from scripts.pregenerate_narratives import _verdict_only_odds_hash
+
+    with patch("bot._NARRATIVE_DB_PATH", str(db)):
+        v_hash = _verdict_only_odds_hash("match_sk_2_2026-05-09")
+
+    current_hash = "sha256_new_odds_v2"  # different — odds have drifted
+    skip = bool(v_hash and current_hash and v_hash == current_hash)
+
+    assert skip is False, (
+        "Full-sweep skip condition must be False when hashes differ — "
+        "stale-odds verdict-only row must fall through to regeneration "
+        "(P2 odds-drift path, pregen_narratives:2624)"
+    )
