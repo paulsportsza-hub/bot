@@ -73,8 +73,8 @@ VENUE_TOKENS = (
     "Stamford Bridge",
     "Emirates",
     "St James' Park",
-    "Goodison",
-    "Selhurst",
+    "Goodison Park",
+    "Selhurst Park",
     "Tottenham Hotspur Stadium",
     # Foreign clubs
     "Camp Nou",
