@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import os
 import re
 from typing import Any, Mapping, Sequence
+
+
+def _single_mention_enabled() -> bool:
+    return os.environ.get("V2_SINGLE_MENTION", "true").strip().lower() in ("true", "1", "yes", "on")
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,7 @@ class VerdictContext:
     bookmaker_count: int | None = None
     line_movement_direction: str | None = None
     tipster_sources_count: int | None = None
+    bet_type_is_team_outcome: bool = True
 
 
 @dataclass(frozen=True)
@@ -194,6 +200,25 @@ ACTION_BY_TIER = {
     "bronze": (
         "Worth a small play on {team}, light stake.",
         "Small lean to {team}, light stake.",
+    ),
+}
+
+MARKET_ACTION_BY_TIER = {
+    "diamond": (
+        "Back {market}, full stake.",
+        "{market} is the play, full stake.",
+    ),
+    "gold": (
+        "Back {market}, standard stake.",
+        "{market} is the play, standard stake.",
+    ),
+    "silver": (
+        "Lean {market}, standard stake.",
+        "{market} gets the nod, standard stake.",
+    ),
+    "bronze": (
+        "Worth a small play on {market}, light stake.",
+        "Small lean to {market}, light stake.",
     ),
 }
 
@@ -403,6 +428,47 @@ def render_verdict_v2(ctx: VerdictContext) -> VerdictResult:
     return safe_shell(ctx, reason)
 
 
+def _is_team_outcome(ctx: VerdictContext) -> bool:
+    """Whether the recommended pick is a team-bet (home/away win) vs market-bet
+    (BTTS Yes/No, Over/Under, draw, etc.)."""
+    if not ctx.bet_type_is_team_outcome:
+        return False
+    rec = _clean(ctx.recommended_team)
+    if not rec:
+        return False
+    return _team_match(rec, _clean(ctx.home_name)) or _team_match(rec, _clean(ctx.away_name))
+
+
+def _market_label(ctx: VerdictContext) -> str:
+    """Human-readable market label for non-team-bet closes."""
+    rec = _clean(ctx.recommended_team)
+    outcome = _clean(ctx.outcome_label)
+    if outcome and not _team_match(outcome, _clean(ctx.home_name)) and not _team_match(outcome, _clean(ctx.away_name)):
+        return outcome
+    return rec or outcome or "the pick"
+
+
+def _market_action_sentence(ctx: VerdictContext, *, salt: str) -> str:
+    options = MARKET_ACTION_BY_TIER.get(_tier(ctx), MARKET_ACTION_BY_TIER["bronze"])
+    return stable_pick(options, key=f"{_base_key(ctx)}|market_action_variant|{salt}").format(
+        market=_market_label(ctx)
+    )
+
+
+def _market_action_with_price(ctx: VerdictContext) -> str:
+    market = _market_label(ctx)
+    tier = _tier(ctx)
+    price = _price_anchor(ctx)
+    price_part = f" {price}" if price else ""
+    if tier == "diamond":
+        return f"back {market}{price_part}, full stake."
+    if tier == "gold":
+        return f"back {market}{price_part}, standard stake."
+    if tier == "silver":
+        return f"lean {market}{price_part}, standard stake."
+    return f"small lean to {market}{price_part}, light stake."
+
+
 def _render_candidate(
     ctx: VerdictContext,
     *,
@@ -410,9 +476,19 @@ def _render_candidate(
     shape: str,
     attempt: int,
 ) -> str | None:
-    action = _action_sentence(ctx, salt=f"{shape}|{primary_fact_type}|{attempt}")
-    action_with_price = _action_with_price(ctx)
-    fact_clause = _render_fact_clause(ctx, primary_fact_type, attempt=attempt)
+    single_mention = _single_mention_enabled()
+    body_name_team = not single_mention
+    is_team_outcome = _is_team_outcome(ctx)
+    if not is_team_outcome and single_mention:
+        body_name_team = False
+        action = _market_action_sentence(ctx, salt=f"{shape}|{primary_fact_type}|{attempt}")
+        action_with_price = _market_action_with_price(ctx)
+    else:
+        action = _action_sentence(ctx, salt=f"{shape}|{primary_fact_type}|{attempt}")
+        action_with_price = _action_with_price(ctx)
+    fact_clause = _render_fact_clause(
+        ctx, primary_fact_type, attempt=attempt, name_team=body_name_team
+    )
     if not fact_clause:
         return None
 
@@ -431,19 +507,30 @@ def _render_candidate(
         rendered = f"{_capitalise(fact_clause)} — {action}"
     elif shape == "price_fact_action":
         if primary_fact_type == "price_edge":
-            secondary = _secondary_fact_clause(ctx, attempt=attempt)
+            secondary = _secondary_fact_clause(ctx, attempt=attempt, name_team=body_name_team)
             if not secondary:
                 return None
             rendered = f"{_capitalise(fact_clause)} and {secondary} — {action}"
         else:
             if not signal_available(ctx, "price_edge"):
                 return None
-            price_clause = _render_fact_clause(ctx, "price_edge", attempt=attempt)
+            price_clause = _render_fact_clause(
+                ctx, "price_edge", attempt=attempt, name_team=body_name_team
+            )
+            if not price_clause:
+                return None
             rendered = f"{_capitalise(price_clause)} and {fact_clause} — {action}"
     else:
         return None
 
-    return _fit_candidate(rendered, ctx, primary_fact_type=primary_fact_type, attempt=attempt)
+    return _fit_candidate(
+        rendered,
+        ctx,
+        primary_fact_type=primary_fact_type,
+        attempt=attempt,
+        body_name_team=body_name_team,
+        is_team_outcome=is_team_outcome,
+    )
 
 
 def _fit_candidate(
@@ -452,12 +539,19 @@ def _fit_candidate(
     *,
     primary_fact_type: str,
     attempt: int,
+    body_name_team: bool = True,
+    is_team_outcome: bool = True,
 ) -> str | None:
     if len(text) <= 200:
         return text
 
-    action = _action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
-    fact_clause = _render_fact_clause(ctx, primary_fact_type, attempt=attempt)
+    if is_team_outcome:
+        action = _action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
+    else:
+        action = _market_action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
+    fact_clause = _render_fact_clause(
+        ctx, primary_fact_type, attempt=attempt, name_team=body_name_team
+    )
     if not fact_clause:
         return None
     compact = f"{_capitalise(fact_clause)} — {action}"
@@ -466,7 +560,19 @@ def _fit_candidate(
     return None
 
 
-def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) -> str | None:
+def _render_fact_clause(
+    ctx: VerdictContext,
+    fact_type: str,
+    *,
+    attempt: int,
+    name_team: bool = True,
+) -> str | None:
+    """Render a fact clause for the given fact_type.
+
+    name_team=True (legacy default) slot-fills the recommended team into the clause.
+    name_team=False (Approach C body) returns a team-less variant using anaphor —
+    the close sentence carries the only team mention.
+    """
     key = f"{_base_key(ctx)}|{fact_type}|{attempt}"
     team = _clean(ctx.recommended_team)
     venue = _clean(ctx.venue)
@@ -477,6 +583,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
         if not clauses:
             return None
         base = stable_pick(clauses, key=f"{key}|price_clause")
+        if not name_team:
+            return base
         if "market" in base:
             return f"{base} for {team}"
         if base.startswith("the number"):
@@ -487,6 +595,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
 
     if fact_type == "form_h2h":
         base = stable_pick(FORM_CLAUSES, key=f"{key}|form_clause")
+        if not name_team:
+            return base
         if base == "recent results back the lean":
             return f"recent results back {team}"
         if base == "form gives this extra weight":
@@ -505,6 +615,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
 
     if fact_type == "lineup_injury":
         base = stable_pick(INJURY_CLAUSES, key=f"{key}|injury_clause")
+        if not name_team:
+            return base
         if base == "team news has not been fully priced in":
             return f"team news has not been fully priced in for {team}"
         if base == "the team-news angle adds weight":
@@ -520,6 +632,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
     if fact_type == "movement":
         if direction == "for":
             base = stable_pick(MOVEMENT_FOR_CLAUSES, key=f"{key}|movement_clause")
+            if not name_team:
+                return base
             if base.endswith("our way"):
                 return f"the line is starting to move toward {team}"
             if base.endswith("the pick"):
@@ -527,13 +641,21 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
             return f"{base} for {team}"
         if direction == "against":
             base = stable_pick(MOVEMENT_AGAINST_CLAUSES, key=f"{key}|movement_clause")
+            if not name_team:
+                return base
             return f"{base} on {team}"
         base = stable_pick(MOVEMENT_UNKNOWN_CLAUSES, key=f"{key}|movement_clause")
+        if not name_team:
+            return base
         return f"{base} for {team}"
 
     if fact_type == "market_agreement":
         base = stable_pick(MARKET_CLAUSES, key=f"{key}|market_clause")
         count = ctx.bookmaker_count or _mapping_int(_signal_value(ctx, "market_agreement"), "bookmaker_count")
+        if not name_team:
+            if count and count >= 3:
+                return f"{count} books line up the same way"
+            return base
         if count and count >= 3:
             return f"{count} books give {team} support"
         if base == "bookmaker breadth backs the lean":
@@ -544,6 +666,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
 
     if fact_type == "tipster":
         base = stable_pick(TIPSTER_CLAUSES, key=f"{key}|tipster_clause")
+        if not name_team:
+            return base
         if base == "outside support lines up here":
             return f"outside support lines up behind {team}"
         if base == "external reads back this side":
@@ -553,6 +677,8 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
     if fact_type == "venue_reference" and venue:
         base = stable_pick(VENUE_CLAUSES, key=f"{key}|venue_clause")
         rendered = base.format(venue=venue)
+        if not name_team:
+            return rendered
         if team in rendered:
             return rendered
         return f"{rendered} for {team}"
@@ -560,12 +686,14 @@ def _render_fact_clause(ctx: VerdictContext, fact_type: str, *, attempt: int) ->
     return None
 
 
-def _secondary_fact_clause(ctx: VerdictContext, *, attempt: int) -> str | None:
+def _secondary_fact_clause(
+    ctx: VerdictContext, *, attempt: int, name_team: bool = True
+) -> str | None:
     candidates = [fact for fact in _available_fact_types(ctx) if fact != "price_edge"]
     if not candidates:
         return None
     for fact in _rotated(candidates, key=f"{_base_key(ctx)}|secondary_fact_type|{attempt}"):
-        clause = _render_fact_clause(ctx, fact, attempt=attempt)
+        clause = _render_fact_clause(ctx, fact, attempt=attempt, name_team=name_team)
         if clause:
             return clause
     return None

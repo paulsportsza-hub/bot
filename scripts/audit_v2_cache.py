@@ -39,6 +39,7 @@ METRIC_LABELS = (
     "is_the_play_count",
     "small_lean_to_count",
     "signal_register_count",
+    "team_mention_over_one_count",
 )
 
 SPORT_VOCAB_BANS = {
@@ -216,6 +217,42 @@ def _recommended_team_for_row(match_id: str, bet_type: str) -> str:
 def _supported_team_bet_type(bet_type: str) -> bool:
     bet_norm = _norm(bet_type)
     return bool(bet_norm and bet_norm not in {"draw", "x"})
+
+
+def _team_mention_count(verdict: str, team: str) -> int:
+    """Count whole-word occurrences of `team` in `verdict` (case-insensitive).
+
+    FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 audit gate (≤1× rule).
+    Mirrors the diagnostic in scripts/inv_team_name_repetition_count.py:
+    counts ' win'-suffixed first, falls back to bare-team. Returns the higher
+    count so the gate trips on either form.
+    """
+    if not verdict or not team:
+        return 0
+    haystack = _norm(verdict)
+    with_suffix = _norm(f"{team} win")
+    bare = _norm(team)
+    matches_with = len(re.findall(rf"\b{re.escape(with_suffix)}\b", haystack))
+    if matches_with:
+        return matches_with
+    return len(re.findall(rf"\b{re.escape(bare)}\b", haystack))
+
+
+def _is_identity_lead_shape(verdict: str, team: str) -> bool:
+    """Heuristic: identity-lead shape opens with team/identity then ' — '.
+
+    The body uses anaphor; close uses team. Total 2× mentions are documented
+    exception to the ≤1× gate. We detect by checking whether the part BEFORE
+    the first em-dash is short and contains the team itself.
+    """
+    if not verdict or "—" not in verdict:
+        return False
+    lead = verdict.split("—", 1)[0].strip()
+    if len(lead) > 60:
+        return False
+    if not team:
+        return False
+    return _mentions(lead, team)
 
 
 def _third_team_mentions(verdict: str, match_id: str) -> list[str]:
@@ -423,6 +460,7 @@ def audit_database(db_path: str) -> dict[str, int]:
     is_the_play_count = 0
     small_lean_to_count = 0
     signal_register_count = 0
+    team_mention_over_one_count = 0
     verdict_to_matches: dict[str, set[str]] = defaultdict(set)
     primary_clauses: list[str] = []
     conn = connect_odds_db(db_path)
@@ -471,6 +509,18 @@ def audit_database(db_path: str) -> dict[str, int]:
             if team_integrity_failed:
                 wrong_team_count += 1
                 invalid_rows.add(row.match_id)
+
+            # FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 — team-mention-count gate.
+            # Threshold: ≤1× recommended-team per render. Identity-lead shape may
+            # carry 2× (lead + close) and is the documented exception — excluded
+            # from the gate. Non-team bets (recommended_team=='') are skipped.
+            row_team = row.recommended_team or _recommended_team_for_row(row.match_id, row.bet_type)
+            if row_team and _supported_team_bet_type(row.bet_type):
+                count = _team_mention_count(verdict, row_team)
+                if count > 1 and not _is_identity_lead_shape(verdict, row_team):
+                    team_mention_over_one_count += 1
+                    invalid_rows.add(row.match_id)
+
             verdict_to_matches[verdict].add(row.match_id)
             clause = _primary_clause(verdict)
             if clause:
@@ -495,6 +545,7 @@ def audit_database(db_path: str) -> dict[str, int]:
         "is_the_play_count": is_the_play_count,
         "small_lean_to_count": small_lean_to_count,
         "signal_register_count": signal_register_count,
+        "team_mention_over_one_count": team_mention_over_one_count,
     }
 
 
@@ -534,6 +585,7 @@ def main() -> int:
             or metrics["signal_register_count"] / total_rows < MIN_SIGNAL_REGISTER_RATIO
         )
         or action_shape_count < 2
+        or metrics["team_mention_over_one_count"] > 0
     ):
         print("AUDIT FAILED", file=sys.stderr)
         return 1

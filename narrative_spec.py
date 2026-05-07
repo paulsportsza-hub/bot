@@ -1559,6 +1559,12 @@ class NarrativeSpec:
     # Edge thesis (code-decided)
     outcome: str = ""             # "draw", "home", "away"
     outcome_label: str = ""       # "the draw", "Aston Villa away win"
+    # Bare team for team-bets (suffix-stripped). Empty for non-team bets.
+    # FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 — Approach D part 1.
+    recommended_team: str = ""
+    # Whether the bet is a team outcome (home/away win) vs market outcome
+    # (BTTS Yes/No, Over/Under, draw). Drives engine market-close path.
+    bet_type_is_team_outcome: bool = True
     bookmaker: str = ""           # "SuperSportBet"
     odds: float = 0.0
     ev_pct: float = 0.0
@@ -1896,6 +1902,40 @@ def _build_outcome_label(
     if outcome == "draw":
         return "the draw"
     return outcome
+
+
+def _build_recommended_team(
+    edge_data: dict, home_name: str, away_name: str
+) -> str:
+    """Bare team name for team-bets (no ' win' suffix); empty for non-team bets.
+
+    FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 (Approach D part 1) — keep the
+    user-facing outcome_label intact ('Liverpool win') while feeding the engine
+    a bare team name so verdict copy reads 'Liverpool', not 'Liverpool win'.
+    """
+    outcome = edge_data.get("outcome", "")
+    if outcome == "home":
+        return _strip_win_suffix(home_name)
+    if outcome == "away":
+        return _strip_win_suffix(away_name)
+    return ""
+
+
+def _strip_win_suffix(team: str) -> str:
+    """Defensive: strip trailing ' win'/' Win' if a caller already pre-suffixed."""
+    if not team:
+        return ""
+    cleaned = team.rstrip()
+    lowered = cleaned.lower()
+    if lowered.endswith(" win"):
+        return cleaned[: -len(" win")].rstrip()
+    return cleaned
+
+
+def _is_team_outcome_bet(edge_data: dict) -> bool:
+    """True for home/away win bets; False for draw, BTTS Yes/No, Over/Under, etc."""
+    outcome = (edge_data.get("outcome") or "").strip().lower()
+    return outcome in ("home", "away")
 
 
 def _build_h2h_summary(
@@ -2289,6 +2329,8 @@ def build_narrative_spec(
         injuries_away=injuries.get("away", []),
         outcome=edge_data.get("outcome", ""),
         outcome_label=_build_outcome_label(edge_data, home_name, away_name),
+        recommended_team=_build_recommended_team(edge_data, home_name, away_name),
+        bet_type_is_team_outcome=_is_team_outcome_bet(edge_data),
         bookmaker=edge_data.get("best_bookmaker", ""),
         odds=edge_data.get("best_odds", 0),
         ev_pct=edge_data.get("edge_pct", 0),
