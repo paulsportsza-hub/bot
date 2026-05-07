@@ -716,6 +716,28 @@ def _draw_digest_footer(img: Image.Image, draw: ImageDraw.Draw, y: int) -> None:
     )
 
 
+def _edge_results_display_filter(conn) -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    return "AND COALESCE(is_displayed_in_rollups, 0) = 1"
+
+
 def compute_digest_stats() -> dict:
     """Compute digest stats from edge_results DB. Returns dict for stats_summary.
 
@@ -743,10 +765,12 @@ def compute_digest_stats() -> dict:
         from scrapers.db_connect import connect_odds_db_readonly as _connect_ro
         conn = _connect_ro(str(db_path), timeout=2.0)
         conn.row_factory = _sqlite3.Row
+        display_filter = _edge_results_display_filter(conn)
 
         # LAST 10 settled
         last_10 = conn.execute(
             "SELECT result FROM edge_results WHERE result IN ('hit','miss')"
+            f" {display_filter}"
             " ORDER BY settled_at DESC LIMIT 10"
         ).fetchall()
         w10 = sum(1 for r in last_10 if r["result"] == "hit")
@@ -757,7 +781,8 @@ def compute_digest_stats() -> dict:
         yesterday = (_date.today() - _td(days=1)).isoformat()
         yrows = conn.execute(
             "SELECT result FROM edge_results WHERE result IN ('hit','miss')"
-            " AND DATE(settled_at) = ?",
+            " AND DATE(settled_at) = ?"
+            f" {display_filter}",
             (yesterday,),
         ).fetchall()
         yw = sum(1 for r in yrows if r["result"] == "hit")
@@ -768,7 +793,8 @@ def compute_digest_stats() -> dict:
         seven_ago = (_date.today() - _td(days=7)).isoformat()
         roi_rows = conn.execute(
             "SELECT recommended_odds, result FROM edge_results"
-            " WHERE result IN ('hit','miss') AND DATE(settled_at) >= ?",
+            " WHERE result IN ('hit','miss') AND DATE(settled_at) >= ?"
+            f" {display_filter}",
             (seven_ago,),
         ).fetchall()
         roi_str = "—"

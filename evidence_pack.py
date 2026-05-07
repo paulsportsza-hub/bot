@@ -17,6 +17,29 @@ logger = logging.getLogger(__name__)
 ODDS_DB = str(ODDS_DB_PATH)
 ENRICHMENT_DB = str(ENRICHMENT_DB_PATH)
 
+
+def _edge_results_display_filter(conn) -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    return "AND COALESCE(is_displayed_in_rollups, 0) = 1"
+
+
 # FIX-NARRATIVE-MMA-LORE-01 (locked 2026-04-25): combat-sport vocabulary key set.
 # Mirror of bot._COMBAT_SPORT_KEYS — keep both in sync. CLAUDE.md Rule 11
 # documents the canonical list; any addition here MUST also land in bot.py.
@@ -998,9 +1021,11 @@ def _fetch_settlement_stats() -> SettlementBlock:
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
     try:
+        display_filter = _edge_results_display_filter(conn)
         rows_30 = conn.execute(
             "SELECT edge_tier, result, predicted_ev, actual_return, settled_at "
             "FROM edge_results WHERE settled_at > ? AND result IN ('hit', 'miss') "
+            f"{display_filter} "
             "ORDER BY settled_at DESC",
             (cutoff_30,),
         ).fetchall()
@@ -1013,14 +1038,18 @@ def _fetch_settlement_stats() -> SettlementBlock:
         latest = _parse_dt(rows_30[0]["settled_at"]) if rows_30 else None
         portfolio_hits = conn.execute(
             "SELECT recommended_odds FROM edge_results "
-            "WHERE result = 'hit' AND settled_at > ? ORDER BY predicted_ev DESC LIMIT 10",
+            "WHERE result = 'hit' AND settled_at > ? "
+            f"{display_filter} "
+            "ORDER BY predicted_ev DESC LIMIT 10",
             (cutoff_7,),
         ).fetchall()
         all_settled = conn.execute(
-            "SELECT COUNT(*) FROM edge_results WHERE result IN ('hit', 'miss')"
+            "SELECT COUNT(*) FROM edge_results WHERE result IN ('hit', 'miss') "
+            f"{display_filter}"
         ).fetchone()[0]
         recent_results = conn.execute(
             "SELECT result FROM edge_results WHERE result IN ('hit', 'miss') "
+            f"{display_filter} "
             "ORDER BY settled_at DESC LIMIT 20"
         ).fetchall()
 
@@ -4197,5 +4226,3 @@ def _resolve_reference_values(pack: EvidencePack, spec) -> dict[str, Any]:
 
 
 # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: verify_shadow_narrative deleted (LLM polish path).
-
-

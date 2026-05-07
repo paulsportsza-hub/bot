@@ -21,7 +21,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 SAST = ZoneInfo("Africa/Johannesburg")
 UTC = ZoneInfo("UTC")
@@ -1416,6 +1416,29 @@ _FIXTURE_TERMINAL_STATUSES = {"Finished", "Cancelled"}
 _PREGEN_WARM_COVERAGE_ALLOWLIST: frozenset[str] = frozenset()
 
 
+def _edge_results_display_filter(conn, alias: str = "") -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f"AND COALESCE({prefix}is_displayed_in_rollups, 0) = 1"
+
+
 def _load_unsettled_edge_match_keys(db_path: str) -> set[str]:
     """Return distinct match_keys with an unsettled edge_results row.
 
@@ -1428,9 +1451,11 @@ def _load_unsettled_edge_match_keys(db_path: str) -> set[str]:
         from scrapers.db_connect import connect_odds_db as _connect_odds_db
         conn = _connect_odds_db(db_path)
         try:
+            _display_filter = _edge_results_display_filter(conn)
             rows = conn.execute(
                 "SELECT DISTINCT match_key FROM edge_results "
-                "WHERE result IS NULL AND match_key IS NOT NULL"
+                "WHERE result IS NULL AND match_key IS NOT NULL "
+                f"{_display_filter}"
             ).fetchall()
         finally:
             conn.close()
@@ -1643,8 +1668,12 @@ def discover_pregen_targets(
         _premium_match_keys: set[str] = set()
         try:
             _tc = _connect_odds_db(path)
+            _display_filter = _edge_results_display_filter(_tc)
             _rows = _tc.execute(
-                "SELECT DISTINCT match_key FROM edge_results WHERE edge_tier IN ('diamond','gold')"
+                "SELECT DISTINCT match_key FROM edge_results "
+                "WHERE edge_tier IN ('diamond','gold') "
+                "AND result IS NULL "
+                f"{_display_filter}"
             ).fetchall()
             _tc.close()
             _premium_match_keys = {r[0] for r in _rows if r[0]}
@@ -2431,7 +2460,7 @@ def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
     path = db_path or str(bot._NARRATIVE_DB_PATH)
     # Use today's date as cutoff: any match dated before today is ≥24h old at midnight UTC.
     # This matches _is_past_kickoff which checks total_seconds > 24 * 3600.
-    cutoff_date = datetime.now(SAST).strftime("%Y-%m-%d")
+    cutoff_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         from scrapers.db_connect import connect_odds_db as _quarantine_conn
         conn = _quarantine_conn(path, timeout=5)

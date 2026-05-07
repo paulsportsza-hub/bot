@@ -34,6 +34,7 @@ def _create_edge_results_db(path: str) -> None:
             settled_at DATETIME,
             match_date DATE NOT NULL,
             confirming_signals INTEGER,
+            is_displayed_in_rollups INTEGER DEFAULT 1,
             UNIQUE(match_key, bet_type)
         );
     """)

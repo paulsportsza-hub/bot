@@ -1190,6 +1190,7 @@ async def _handle_card_deeplink(
                     "SELECT match_key, edge_tier, bet_type, recommended_odds, bookmaker, "
                     "predicted_ev, league, match_date, result, composite_score, confirming_signals "
                     "FROM edge_results WHERE match_key = ? "
+                    f"{_edge_results_display_filter(_dl_conn)} "
                     "ORDER BY result IS NULL DESC, recommended_at DESC LIMIT 1",
                     (match_key,),
                 ).fetchone()
@@ -1309,6 +1310,10 @@ def _welcome_img_path() -> pathlib.Path | None:
     if _WELCOME_IMG_PATH.exists():
         age_h = (_dt.datetime.now().timestamp() - _WELCOME_IMG_PATH.stat().st_mtime) / 3600
         if age_h <= 30:
+            _pick = _read_welcome_pick_sidecar()
+            if _pick and not _welcome_pick_matches_displayed_rollup(_pick):
+                log.warning("welcome_today.png pick hidden from rollups — using fallback")
+                return _FALLBACK_IMG_PATH if _FALLBACK_IMG_PATH.exists() else None
             return _WELCOME_IMG_PATH
         log.warning("welcome_today.png stale (%.1fh) — using fallback", age_h)
     if _FALLBACK_IMG_PATH.exists():
@@ -1322,6 +1327,231 @@ _welcome_pick_ts: float = 0.0
 _WELCOME_PICK_TTL = 3600
 
 
+def _edge_results_display_filter(conn, alias: str = "") -> str:
+    """Return the displayed-rollups predicate only when the DB schema supports it."""
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f"AND COALESCE({prefix}is_displayed_in_rollups, 0) = 1"
+
+
+def _normalise_edge_result_bet_type(bet_type: str) -> str:
+    raw = (bet_type or "").strip().lower()
+    if raw in ("home", "home win", "1"):
+        return "home"
+    if raw in ("away", "away win", "2"):
+        return "away"
+    if raw in ("draw", "x"):
+        return "draw"
+    return raw
+
+
+def _edge_results_selection_visibility(conn, since_date: str | None = None) -> dict[tuple[str, str], bool] | None:
+    """Return latest display visibility by match/outcome when the schema supports it."""
+    if not _edge_results_display_filter(conn):
+        return {}
+    try:
+        where = "WHERE result IS NULL"
+        params: list[str] = []
+        if since_date:
+            where += " AND match_date >= ?"
+            params.append(since_date)
+        rows = conn.execute(
+            f"""
+            SELECT match_key, bet_type, COALESCE(is_displayed_in_rollups, 0) AS displayed
+            FROM edge_results
+            {where}
+            ORDER BY COALESCE(recommended_at, '') DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+    except Exception:
+        return None
+
+    visibility: dict[tuple[str, str], bool] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            match_key = row.get("match_key")
+            bet_type = row.get("bet_type")
+            displayed = row.get("displayed")
+        else:
+            try:
+                match_key = row["match_key"]
+                bet_type = row["bet_type"]
+                displayed = row["displayed"]
+            except (IndexError, TypeError, KeyError):
+                match_key, bet_type, displayed = row[0], row[1], row[2]
+        outcome = _normalise_edge_result_bet_type(bet_type)
+        if not match_key or not outcome:
+            continue
+        key = (match_key, outcome)
+        if bool(displayed):
+            visibility[key] = True
+        elif key not in visibility:
+            visibility[key] = bool(displayed)
+    return visibility
+
+
+def _edge_result_edge_id_visibility(
+    conn,
+    edge_id: str,
+    recommended_at: str | None = None,
+) -> bool | None:
+    """Return current display visibility for a specific edge_results row."""
+    if not edge_id or not _edge_results_display_filter(conn):
+        return None
+    try:
+        version_filter = ""
+        params: list[str] = [edge_id]
+        if recommended_at:
+            version_filter = "AND recommended_at = ?"
+            params.append(recommended_at)
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(is_displayed_in_rollups, 0) AS displayed
+            FROM edge_results
+            WHERE edge_id = ?
+              AND result IS NULL
+              {version_filter}
+            ORDER BY COALESCE(recommended_at, '') DESC, id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if row is None:
+            return False
+        if isinstance(row, dict):
+            displayed = row.get("displayed")
+        else:
+            try:
+                displayed = row["displayed"]
+            except (IndexError, TypeError, KeyError):
+                displayed = row[0]
+        return bool(displayed)
+    except Exception:
+        return None
+
+
+def _edge_result_has_displayed_rollup(match_key: str) -> bool:
+    if not match_key:
+        return False
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        conn = connect_odds_db(DB_PATH)
+        try:
+            _display_filter = _edge_results_display_filter(conn)
+            row = conn.execute(
+                "SELECT 1 FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                f"{_display_filter} LIMIT 1",
+                (match_key,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("_edge_result_has_displayed_rollup failed for %s: %s", match_key, exc)
+        return False
+
+
+def _edge_results_display_scope_active() -> bool:
+    """Return True when edge_results display flags should gate fallback sources."""
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        conn = connect_odds_db(DB_PATH)
+        try:
+            if not _edge_results_display_filter(conn):
+                return False
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM edge_results
+                WHERE result IS NULL
+                  AND match_date >= date('now')
+                LIMIT 1
+                """
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("_edge_results_display_scope_active failed: %s", exc)
+        return False
+
+
+def _read_welcome_pick_sidecar(now: float | None = None) -> dict | None:
+    if not _WELCOME_PICK_JSON.exists():
+        return None
+    import json as _json
+    import time as _time
+    try:
+        _now = now if now is not None else _time.time()
+        _age_h = (_now - _WELCOME_PICK_JSON.stat().st_mtime) / 3600
+        if _age_h > 30:
+            return None
+        pick = _json.loads(_WELCOME_PICK_JSON.read_text())
+        return pick if pick.get("match_key") else None
+    except Exception as exc:
+        log.debug("_read_welcome_pick_sidecar failed: %s", exc)
+        return None
+
+
+def _welcome_pick_matches_displayed_rollup(pick: dict) -> bool:
+    match_key = pick.get("match_key") or ""
+    if not match_key:
+        return False
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        conn = connect_odds_db(DB_PATH)
+        conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
+        try:
+            _display_filter = _edge_results_display_filter(conn)
+            if not _display_filter:
+                return True
+            clauses = ["match_key = ?"]
+            params: list = [match_key]
+            edge_tier = (pick.get("edge_tier") or "").strip().lower()
+            if edge_tier:
+                clauses.append("LOWER(edge_tier) = ?")
+                params.append(edge_tier)
+            if pick.get("composite_score") is not None:
+                clauses.append("ROUND(composite_score, 1) = ROUND(?, 1)")
+                params.append(float(pick.get("composite_score") or 0))
+            if pick.get("confirming_signals") is not None:
+                clauses.append("COALESCE(confirming_signals, -1) = ?")
+                params.append(int(pick.get("confirming_signals") or 0))
+            sql = (
+                "SELECT 1 FROM edge_results WHERE "
+                + " AND ".join(clauses)
+                + f" {_display_filter} LIMIT 1"
+            )
+            return conn.execute(sql, params).fetchone() is not None
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("_welcome_pick_matches_displayed_rollup failed for %s: %s", match_key, exc)
+        return False
+
+
 def _load_welcome_pick() -> dict | None:
     """Return the pick used to generate today's welcome image (sync, cached 1h).
 
@@ -1333,21 +1563,19 @@ def _load_welcome_pick() -> dict | None:
     import time
     now = time.time()
     if _welcome_pick_ts > 0 and now - _welcome_pick_ts < _WELCOME_PICK_TTL:
-        return _welcome_pick_cache
+        if _welcome_pick_cache and _welcome_pick_matches_displayed_rollup(_welcome_pick_cache):
+            return _welcome_pick_cache
+        _welcome_pick_cache = None
+        _welcome_pick_ts = 0.0
     # Primary: sidecar written by publisher/generate_welcome_image.py
-    if _WELCOME_PICK_JSON.exists():
-        import json as _json
-        try:
-            _age_h = (now - _WELCOME_PICK_JSON.stat().st_mtime) / 3600
-            if _age_h <= 30:
-                pick = _json.loads(_WELCOME_PICK_JSON.read_text())
-                if pick.get("match_key"):
-                    log.debug("_load_welcome_pick: sidecar hit (%s)", pick.get("match_key"))
-                    _welcome_pick_cache = pick
-                    _welcome_pick_ts = now
-                    return pick
-        except Exception as exc:
-            log.debug("_load_welcome_pick sidecar failed: %s", exc)
+    pick = _read_welcome_pick_sidecar(now)
+    if pick:
+        if _welcome_pick_matches_displayed_rollup(pick):
+            log.debug("_load_welcome_pick: sidecar hit (%s)", pick.get("match_key"))
+            _welcome_pick_cache = pick
+            _welcome_pick_ts = now
+            return pick
+        log.debug("_load_welcome_pick: sidecar hidden from rollups (%s)", pick.get("match_key"))
     # Fallback: DB query (pre-sidecar compat / sidecar absent)
     try:
         from scrapers.db_connect import connect_odds_db
@@ -1359,6 +1587,7 @@ def _load_welcome_pick() -> dict | None:
         yesterday = (datetime.now(_sast).date() - timedelta(days=1)).isoformat()
         conn = connect_odds_db(DB_PATH)
         conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
+        _display_filter = _edge_results_display_filter(conn)
         _order = (
             "CASE edge_tier WHEN 'diamond' THEN 1 WHEN 'gold' THEN 2 ELSE 3 END, "
             "confirming_signals DESC, composite_score DESC"
@@ -1368,6 +1597,7 @@ def _load_welcome_pick() -> dict | None:
             pick = conn.execute(
                 "SELECT match_key, edge_tier FROM edge_results "
                 f"WHERE match_date = ? AND edge_tier IN ('diamond', 'gold') "
+                f"{_display_filter} "
                 f"ORDER BY {_order} LIMIT 1",
                 (_date,),
             ).fetchone()
@@ -1380,7 +1610,7 @@ def _load_welcome_pick() -> dict | None:
         return pick
     except Exception as exc:
         log.debug("_load_welcome_pick failed: %s", exc)
-        return _welcome_pick_cache
+        return None
 
 
 def _load_edge_tip_by_key(match_key: str) -> dict | None:
@@ -1399,11 +1629,13 @@ def _load_edge_tip_by_key(match_key: str) -> dict | None:
         from scrapers.edge.edge_config import DB_PATH as _etk_db
         conn = _etk_conn(_etk_db)
         conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
+        _display_filter = _edge_results_display_filter(conn)
         row = conn.execute(
             "SELECT match_key, edge_id, edge_tier, composite_score, bet_type, "
             "recommended_odds, bookmaker, predicted_ev, league, match_date, "
             "confirming_signals "
             "FROM edge_results WHERE match_key = ? "
+            f"{_display_filter} "
             "ORDER BY CASE WHEN result IS NULL THEN 0 ELSE 1 END, id DESC LIMIT 1",
             (match_key,),
         ).fetchone()
@@ -1970,7 +2202,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 except Exception as _yg_empty_err:
                     log.warning("MM yg:all empty-state edit failed for user %s: %s", user_id, _yg_empty_err)
             else:
-                _edge_info = _get_edge_info_for_games(_raw_games)
+                _edge_info = await asyncio.to_thread(_get_edge_info_for_games, _raw_games)
                 _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
                 # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
                 _mm_sorted = _sort_mm_snapshot(_mm_input)
@@ -1994,7 +2226,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 g for g in _raw_games_sf
                 if config.LEAGUE_SPORT.get(g.get("league_key", "")) == sk
             ] if sk else _raw_games_sf
-            _edge_info_sf = _get_edge_info_for_games(_raw_filtered_sf)
+            _edge_info_sf = await asyncio.to_thread(
+                _get_edge_info_for_games,
+                _raw_filtered_sf,
+            )
             _mm_input_sf = await _build_mm_matches_for_card_with_odds(_raw_filtered_sf, _edge_info_sf)
             _mm_sorted_sf = _sort_mm_snapshot(_mm_input_sf)
             _mm_games_snapshot[user_id] = _mm_sorted_sf
@@ -2021,7 +2256,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             if _tier_key not in _EDGE_PICKS_INDEX_TIERS:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
                 return
-            _tier_source = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            _tier_source = await _revalidate_hot_tips_for_display(
+                _ht_tips_snapshot.get(user_id)
+                or _hot_tips_cache.get("global", {}).get("tips", [])
+            )
             _tier_tips = _filter_hot_tips_by_tier(_tier_source, _tier_key)
             _tier_user = await get_effective_tier(user_id)
             _tier_rv = 999
@@ -2080,7 +2318,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _bp_parts = action.split(":")
             _back_page = int(_bp_parts[1]) if len(_bp_parts) > 1 and _bp_parts[1].isdigit() else 0
             # Prefer user's snapshot (frozen at render time) over live global cache
-            _bt_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            _bt_tips = await _revalidate_hot_tips_for_display(
+                _ht_tips_snapshot.get(user_id)
+                or _hot_tips_cache.get("global", {}).get("tips", [])
+            )
             if _bt_tips:
                 _bt_tier = await get_effective_tier(user_id)
                 _bt_rv = 999
@@ -2146,11 +2387,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if len(_upg_parts) > 1 and _upg_parts[1].isdigit()
                 else None
             )
+            _upg_snapshot = await _revalidate_hot_tips_for_display(
+                _ht_tips_snapshot.get(user_id) or []
+            )
+            _upg_global = await _revalidate_hot_tips_for_display(
+                _hot_tips_cache.get("global", {}).get("tips", [])
+            )
             _upg_tip = next(
-                (t for t in (_ht_tips_snapshot.get(user_id) or []) if _tip_matches_hot_key(t, _upg_key)),
+                (t for t in _upg_snapshot if _tip_matches_hot_key(t, _upg_key)),
                 None,
             ) or next(
-                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, _upg_key)),
+                (t for t in _upg_global if _tip_matches_hot_key(t, _upg_key)),
                 None,
             )
             _upg_text = get_upgrade_message(
@@ -2297,7 +2544,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             except (ValueError, IndexError):
                 page_num = 0
             # Snapshot is frozen at render time — never refresh from live cache on page nav.
-            tips = _ht_tips_snapshot.get(user_id, [])
+            try:
+                tips = await _revalidate_hot_tips_for_display(
+                    _ht_tips_snapshot.get(user_id, []),
+                    raise_on_error=True,
+                )
+                _ht_tips_snapshot[user_id] = tips
+            except Exception:
+                tips = []
             if tips:
                 _user_tier = await get_effective_tier(user_id)
                 _pg_proof, _pg_summary = await asyncio.gather(
@@ -2370,6 +2624,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     or _ep_tip.get("tier") or "bronze"
                 ).lower()
                 _ep_event_id = _ep_tip.get("event_id") or _ep_tip.get("match_id") or ""
+                if not await asyncio.to_thread(_cached_tip_has_displayed_rollup, _ep_tip):
+                    await query.edit_message_text(
+                        "⚡ <b>Edge no longer available</b>\n\n"
+                        "This edge has been removed from the active Edge Picks set.",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("↩️ Back", callback_data="hot:go"),
+                        ]]),
+                    )
+                    return
                 # BUILD-CARDWIRE: Enrich tip with verified DB data before building detail card
                 _ep_tip_enriched = await asyncio.to_thread(
                     _enrich_tip_for_card, _ep_tip, _ep_event_id
@@ -2422,7 +2686,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     except asyncio.TimeoutError:
                         _sched_rb = []
                 if _sched_rb:
-                    _ei_rb = _get_edge_info_for_games(_sched_rb)
+                    _ei_rb = await asyncio.to_thread(_get_edge_info_for_games, _sched_rb)
                     _mi_rb = await _build_mm_matches_for_card_with_odds(_sched_rb, _ei_rb)
                     _ms_rb = _sort_mm_snapshot(_mi_rb)
                     _mm_games_snapshot[user_id] = _ms_rb
@@ -2694,7 +2958,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ed_pg_str = action.split(":")[1]
                 if _ed_pg_str.isdigit():
                     _ed_pg = int(_ed_pg_str)
-            _ed_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            _ed_tips = await _revalidate_hot_tips_for_display(
+                _ht_tips_snapshot.get(user_id)
+                or _hot_tips_cache.get("global", {}).get("tips", [])
+            )
             if _ed_tips:
                 _ed_tier = await get_effective_tier(user_id)
                 _ed_rv = 999
@@ -2744,7 +3011,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         if action == "back":
             _mdback_ut = await get_effective_tier(user_id)
             _raw_games_md = _schedule_cache.get(user_id) or await _fetch_schedule_games(user_id)
-            _edge_info_md = _get_edge_info_for_games(_raw_games_md)
+            _edge_info_md = await asyncio.to_thread(_get_edge_info_for_games, _raw_games_md)
             _mm_input_md = await _build_mm_matches_for_card_with_odds(_raw_games_md, _edge_info_md)
             # W3-FIX: sort to align with card [N] order
             _mm_sorted_md = _sort_mm_snapshot(_mm_input_md)
@@ -2766,10 +3033,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         if action == "back" or action.startswith("back:"):
             # Rebuild digest from per-user snapshot
             _td_tips = _today_digest_snapshot.get(user_id)
+            if _td_tips:
+                try:
+                    _td_tips = await _revalidate_hot_tips_for_display(
+                        _td_tips,
+                        raise_on_error=True,
+                    )
+                    _today_digest_snapshot[user_id] = _td_tips
+                except Exception:
+                    _td_tips = []
             if not _td_tips:
                 # Snapshot cleared (restart) — serve fresh digest via /today flow
                 _td_fresh = _hot_tips_cache.get("global", {}).get("tips", [])
-                _td_tips = _td_fresh or []
+                _td_tips = await _revalidate_hot_tips_for_display(_td_fresh)
                 for _t in _td_tips:
                     if _t.get("match_id") and not _t.get("cb_key"):
                         _t["cb_key"] = _shorten_cb_key(_t["match_id"])
@@ -2787,7 +3063,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         _TIER_EMOJIS_DG = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}
         if action.startswith("filter:"):
             _dg_tier = action.split(":", 1)[1].lower()
-            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            try:
+                _dg_tips = await _revalidate_hot_tips_for_display(
+                    _today_digest_snapshot.get(user_id) or [],
+                    raise_on_error=True,
+                )
+                _today_digest_snapshot[user_id] = _dg_tips
+            except Exception:
+                _dg_tips = []
             _dg_filtered = [
                 t for t in _dg_tips
                 if (t.get("display_tier") or t.get("edge_rating") or "bronze").lower() == _dg_tier
@@ -2801,7 +3084,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 caption=_dg_caption, parse_mode=ParseMode.HTML, reply_markup=_dg_back_markup
             )
         elif action == "stats":
-            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            try:
+                _dg_tips = await _revalidate_hot_tips_for_display(
+                    _today_digest_snapshot.get(user_id) or [],
+                    raise_on_error=True,
+                )
+                _today_digest_snapshot[user_id] = _dg_tips
+            except Exception:
+                _dg_tips = []
             _stat_lines = ["📊 <b>Today's Edge Stats</b>\n"]
             for _tier in ("diamond", "gold", "silver", "bronze"):
                 _cnt = sum(
@@ -2821,9 +3111,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             )
         elif action == "back":
             # Restore original image card caption (no re-upload)
-            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            try:
+                _dg_tips = await _revalidate_hot_tips_for_display(
+                    _today_digest_snapshot.get(user_id) or [],
+                    raise_on_error=True,
+                )
+                _today_digest_snapshot[user_id] = _dg_tips
+            except Exception:
+                _dg_tips = []
             if not _dg_tips:
-                _dg_tips = list(_hot_tips_cache.get("global", {}).get("tips", []))
+                _dg_tips = await _revalidate_hot_tips_for_display(
+                    _hot_tips_cache.get("global", {}).get("tips", [])
+                )
                 for _t in _dg_tips:
                     if _t.get("match_id") and not _t.get("cb_key"):
                         _t["cb_key"] = _shorten_cb_key(_t["match_id"])
@@ -2850,6 +3149,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             match_key = _resolve_cb_key(_raw_cb_key)
             _sentry_user(user_id)
             _sentry_tags(flow="edge_detail", route="edge:detail", match_id=match_key)
+            if not await asyncio.to_thread(_edge_result_has_displayed_rollup, match_key):
+                await query.edit_message_text(
+                    "⚡ <b>Edge no longer available</b>\n\n"
+                    "This edge has been removed from the active Edge Picks set.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("↩️ Back", callback_data="hot:go"),
+                    ]]),
+                )
+                return
             try:
                 await query.answer("⏳ Loading…", show_alert=False)
             except Exception:
@@ -3011,6 +3320,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     log.warning("Card detail tip lookup exceeded 2.5s — degrading")
                 except Exception:
                     pass
+
+            if _card_tip and not await asyncio.to_thread(
+                _cached_tip_has_displayed_rollup,
+                _card_tip,
+            ):
+                await query.edit_message_text(
+                    "⚡ <b>Edge no longer available</b>\n\n"
+                    "This edge has been removed from the active Edge Picks set.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "↩️ Back",
+                            callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
+                        ),
+                    ]]),
+                )
+                return
 
             # Determine edge tier for card buttons — FIX 4 (CARD-REBUILD-02):
             # Default to "no_rating" (not "bronze") when no tier source available.
@@ -3820,14 +4146,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                  if _tip_matches_hot_key(t, match_key)),
                 None,
             )
+            if _snap_tip and not await asyncio.to_thread(
+                _cached_tip_has_displayed_rollup,
+                _snap_tip,
+            ):
+                _snap_tip = None
             if _snap_tip:
                 _instant_tips = [_snap_tip]
                 log.info("R10: snapshot-first for %s user %s", match_key, user_id)
             else:
                 # Fallback: _game_tips_cache or global cache (snapshot empty = bot restart)
                 _instant_tips = _game_tips_cache.get(match_key)
+                if _instant_tips:
+                    _instant_tips = await _revalidate_hot_tips_for_display(_instant_tips)
                 if not _instant_tips:
-                    _ht_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+                    _ht_tips = await _revalidate_hot_tips_for_display(
+                        _hot_tips_cache.get("global", {}).get("tips", [])
+                    )
                     _ht_match = next(
                         (t for t in _ht_tips
                          if t.get("match_id") == match_key or t.get("event_id") == match_key),
@@ -4524,13 +4859,19 @@ async def handle_menu(query, action: str) -> None:
                 raise ValueError("no welcome pick available")
             _wp_key = _wp.get("match_key", "")
             # Fast path: find the tip in the user's snapshot or global hot-tips cache
+            _wp_snapshot = await _revalidate_hot_tips_for_display(
+                _ht_tips_snapshot.get(user_id) or []
+            )
             _wp_tip = next(
-                (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                (t for t in _wp_snapshot if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
                 None,
             )
             if _wp_tip is None:
+                _wp_global = await _revalidate_hot_tips_for_display(
+                    _hot_tips_cache.get("global", {}).get("tips", [])
+                )
                 _wp_tip = next(
-                    (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                    (t for t in _wp_global if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
                     None,
                 )
             # Slow path: load fresh from edge_results if not in any cache
@@ -6615,7 +6956,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         # BUILD-W3 / W3-FIX: send My Matches image card (falls back to text on render failure)
         try:
             _raw_games_wm = _schedule_cache.get(user_id, [])
-            _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
+            _edge_info_wm = await asyncio.to_thread(_get_edge_info_for_games, _raw_games_wm)
             _mm_input_wm = await _build_mm_matches_for_card_with_odds(_raw_games_wm, _edge_info_wm)
             # W3-FIX: sort to align with card [N] order
             _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
@@ -6726,7 +7067,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 if not _schedule_cache.get(user_id):
                     return
                 _rg = _schedule_cache.get(user_id, [])
-                _ei = _get_edge_info_for_games(_rg)
+                _ei = await asyncio.to_thread(_get_edge_info_for_games, _rg)
                 _mi = await _build_mm_matches_for_card_with_odds(_rg, _ei)
                 _ms = _sort_mm_snapshot(_mi)
                 _mm_games_snapshot[user_id] = _ms
@@ -6755,7 +7096,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 pass  # Spinner has in-flight API call; proceed with delivery
         # BUILD-W3 / W3-FIX: store sorted snapshot + build card data
         _raw_games_cp = _schedule_cache.get(user_id, [])
-        _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
+        _edge_info_cp = await asyncio.to_thread(_get_edge_info_for_games, _raw_games_cp)
         _mm_input_cp = await _build_mm_matches_for_card_with_odds(_raw_games_cp, _edge_info_cp)
         # W3-FIX: sort to align with card [N] order
         _mm_sorted_cp = _sort_mm_snapshot(_mm_input_cp)
@@ -7026,7 +7367,7 @@ async def _render_your_games_all(
     # W84-P0: removed _check_edges_for_games() — it does per-league Odds API calls on every render.
     # Edge info comes from hot tips cache via _get_edge_info_for_games() instead.
     edge_events: dict[str, bool] = {}
-    edge_info = _get_edge_info_for_games(games)
+    edge_info = await asyncio.to_thread(_get_edge_info_for_games, games)
 
     # Sort: chronological only (earliest kickoff first)
     sorted_games = sorted(games, key=lambda g: g.get("commence_time", ""))
@@ -7270,7 +7611,7 @@ async def _render_your_games_sport(
         if ct_sa and ct_sa.date() == target_date:
             day_games.append({**event, "_ct_sa": ct_sa})
 
-    edge_events = _get_edge_info_for_games(day_games)
+    edge_events = await asyncio.to_thread(_get_edge_info_for_games, day_games)
 
     date_label = _format_date_label(target_date, now)
 
@@ -7800,7 +8141,9 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
     if not cache_entry or not cache_entry.get("tips"):
         return {}
 
-    tips = cache_entry["tips"]
+    tips = _filter_cached_hot_tips_by_display_flags(list(cache_entry["tips"]))
+    if not tips:
+        return {}
 
     # Normalise team names through team_mapper for cross-source matching.
     # Schedule events use raw Odds API names ("Brighton and Hove Albion");
@@ -9671,8 +10014,10 @@ def _get_edge_result_match_date(match_key: str = "") -> str:
 
         _conn = _get_conn(str(ODDS_DB_PATH), timeout_ms=3000)
         try:
+            _display_filter = _edge_results_display_filter(_conn)
             _row = _conn.execute(
-                "SELECT match_date FROM edge_results WHERE match_key = ? LIMIT 1",
+                "SELECT match_date FROM edge_results WHERE match_key = ? "
+                f"{_display_filter} LIMIT 1",
                 (match_key,),
             ).fetchone()
         finally:
@@ -9797,15 +10142,21 @@ async def _resolve_hot_tip_header(
     if seed_tip:
         candidates.append(seed_tip)
 
+    snapshot_tips = await _revalidate_hot_tips_for_display(
+        _ht_tips_snapshot.get(user_id, [])
+    )
     snap_tip = next(
-        (t for t in _ht_tips_snapshot.get(user_id, []) if _tip_matches_hot_key(t, match_key)),
+        (t for t in snapshot_tips if _tip_matches_hot_key(t, match_key)),
         None,
     )
     if snap_tip and snap_tip is not seed_tip:
         candidates.append(snap_tip)
 
+    hot_tips = await _revalidate_hot_tips_for_display(
+        _hot_tips_cache.get("global", {}).get("tips", [])
+    )
     hot_tip = next(
-        (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, match_key)),
+        (t for t in hot_tips if _tip_matches_hot_key(t, match_key)),
         None,
     )
     if hot_tip and hot_tip is not seed_tip and hot_tip is not snap_tip:
@@ -9901,15 +10252,21 @@ def _resolve_hot_tip_model_state(
     """Resolve authoritative Hot Tips model-only state for a detail surface."""
     candidates: list[dict] = []
 
+    snapshot_tips = _filter_cached_hot_tips_by_display_flags(
+        _ht_tips_snapshot.get(user_id, [])
+    )
     snap_tip = next(
-        (t for t in _ht_tips_snapshot.get(user_id, []) if _tip_matches_hot_key(t, match_key)),
+        (t for t in snapshot_tips if _tip_matches_hot_key(t, match_key)),
         None,
     )
     if snap_tip:
         candidates.append(snap_tip)
 
+    hot_tips = _filter_cached_hot_tips_by_display_flags(
+        _hot_tips_cache.get("global", {}).get("tips", [])
+    )
     hot_tip = next(
-        (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, match_key)),
+        (t for t in hot_tips if _tip_matches_hot_key(t, match_key)),
         None,
     )
     if hot_tip and hot_tip is not snap_tip:
@@ -10461,9 +10818,11 @@ def _get_fresh_tier_from_er(match_key: str) -> str | None:
         _gft_conn = _gft_fn(_gft_db)
         _gft_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
         try:
+            _gft_display_filter = _edge_results_display_filter(_gft_conn)
             _gft_row = _gft_conn.execute(
                 "SELECT edge_tier "
                 "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                f"{_gft_display_filter} "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_key,),
             ).fetchone()
@@ -10488,9 +10847,11 @@ def _get_recent_wins_from_edge_results(limit: int = 5) -> list[dict]:
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
         )
+        _display_filter = _edge_results_display_filter(_conn)
         rows = _conn.execute(
             "SELECT match_key, edge_tier, recommended_odds, actual_return, sport, bet_type "
             "FROM edge_results WHERE result='hit' "
+            f"{_display_filter} "
             "ORDER BY CASE edge_tier WHEN 'diamond' THEN 1 WHEN 'gold' THEN 2 WHEN 'silver' THEN 3 ELSE 4 END, "
             "settled_at DESC LIMIT ?",
             (limit,)
@@ -10519,10 +10880,12 @@ def _get_bru_daily_drop(limit: int = 5) -> list[dict]:
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
         )
+        _display_filter = _edge_results_display_filter(_conn)
         picks = _conn.execute(
             "SELECT match_key, edge_tier, composite_score, bet_type, recommended_odds, "
             "bookmaker, sport, league "
             "FROM edge_results WHERE match_date = ? AND edge_tier IN ('diamond', 'gold') "
+            f"{_display_filter} "
             "ORDER BY CASE edge_tier WHEN 'diamond' THEN 1 ELSE 2 END, "
             "composite_score DESC LIMIT ?",
             (today, limit),
@@ -10627,20 +10990,24 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         # Conservative: matches without fixture_mapping entry are kept (date-only fallback).
         # Falls back to date-only query if fixture_mapping table doesn't exist (test envs).
         _now_utc = _dt_cls.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        _display_filter = _edge_results_display_filter(_conn, "e")
+        _newer_display_filter = _edge_results_display_filter(_conn, "newer")
         _base_sql = """
             SELECT e.match_key, e.edge_id, e.edge_tier, e.composite_score, e.bet_type,
                    e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date,
-                   e.confirming_signals
+                   e.recommended_at, e.confirming_signals
                    {extra_cols}
             FROM edge_results e
             {join}
             WHERE e.match_date >= ? AND e.result IS NULL
+              {display_filter}
               {kickoff_filter}
               AND NOT EXISTS (
                   SELECT 1
                   FROM edge_results newer
                   WHERE newer.match_key = e.match_key
                     AND newer.result IS NULL
+                    {newer_display_filter}
                     AND (
                         COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
                         OR (
@@ -10658,6 +11025,8 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
                 _base_sql.format(
                     extra_cols=", fm.kickoff AS fm_kickoff",
                     join="LEFT JOIN fixture_mapping fm ON fm.match_key = e.match_key",
+                    display_filter=_display_filter,
+                    newer_display_filter=_newer_display_filter,
                     kickoff_filter="AND (fm.kickoff IS NULL OR fm.kickoff > ?)",
                 ),
                 (_today, _now_utc, _limit_val),
@@ -10665,7 +11034,13 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         except Exception:
             # fixture_mapping table absent (test environment) — date-only fallback
             rows = _conn.execute(
-                _base_sql.format(extra_cols="", join="", kickoff_filter=""),
+                _base_sql.format(
+                    extra_cols="",
+                    join="",
+                    display_filter=_display_filter,
+                    newer_display_filter=_newer_display_filter,
+                    kickoff_filter="",
+                ),
                 (_today, _limit_val),
             ).fetchall()
     except Exception as _e:
@@ -10713,12 +11088,8 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
 
         league_key = (row["league"] or "").lower()
         outcome_label = row["bet_type"] or "home"
-        # Normalise "Home Win"/"Away Win" back to outcome terms for sport_key lookup
-        if outcome_label == "Home Win":
-            outcome_raw = "home"
-        elif outcome_label == "Away Win":
-            outcome_raw = "away"
-        else:
+        outcome_raw = _normalise_edge_result_bet_type(str(outcome_label))
+        if outcome_raw not in ("home", "away", "draw"):
             outcome_raw = "draw"
         _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
         outcome_display = _outcome_labels.get(outcome_raw, outcome_label)
@@ -10734,6 +11105,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             "event_id": mk,
             "match_id": mk,
             "edge_id": row.get("edge_id") or "",
+            "recommended_at": row.get("recommended_at") or "",
             "sport_key": _DB_LEAGUE_SPORT.get(league_key, config.LEAGUE_SPORT.get(league_key, "soccer")),
             "home_team": home_display,
             "away_team": away_display,
@@ -10851,6 +11223,110 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         -t["ev"],
     ))
     return tips[: max(int(limit or 10), 1)]
+
+
+def _filter_cached_hot_tips_by_display_flags(
+    tips: list[dict],
+    *,
+    raise_on_error: bool = False,
+) -> list[dict]:
+    """Drop cached tips when the current edge_results display flag hides them."""
+    if not tips:
+        return tips
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        try:
+            _display_filter = _edge_results_display_filter(_conn)
+            if not _display_filter:
+                return tips
+            if _display_filter == "AND 0 = 1":
+                if raise_on_error:
+                    raise RuntimeError("edge_results display schema introspection failed")
+                return []
+            visibility = _edge_results_selection_visibility(_conn)
+            if visibility is None:
+                if raise_on_error:
+                    raise RuntimeError("edge_results display visibility lookup failed")
+                return []
+            filtered: list[dict] = []
+            for tip in tips:
+                edge_id = str(tip.get("edge_id") or "").strip()
+                if edge_id:
+                    edge_visibility = _edge_result_edge_id_visibility(
+                        _conn,
+                        edge_id,
+                        str(tip.get("recommended_at") or "").strip() or None,
+                    )
+                    if edge_visibility is False:
+                        continue
+                    if edge_visibility is True:
+                        filtered.append(tip)
+                        continue
+
+                match_key = (
+                    tip.get("match_id")
+                    or tip.get("event_id")
+                    or tip.get("match_key")
+                    or ""
+                )
+                if not match_key:
+                    continue
+                outcome_raw = (
+                    tip.get("outcome_key")
+                    or (tip.get("edge_v2") or {}).get("outcome")
+                    or tip.get("bet_type")
+                    or tip.get("outcome")
+                    or ""
+                )
+                outcome = _normalise_edge_result_bet_type(str(outcome_raw))
+                if outcome not in ("home", "away", "draw"):
+                    try:
+                        home_name, away_name = _teams_from_vs_event_id(match_key)
+                        outcome_text = str(outcome_raw).strip().lower()
+                        if outcome_text == home_name.strip().lower():
+                            outcome = "home"
+                        elif outcome_text == away_name.strip().lower():
+                            outcome = "away"
+                    except Exception:
+                        pass
+                if visibility.get((match_key, outcome)) is not True:
+                    continue
+                filtered.append(tip)
+            return filtered
+        finally:
+            _conn.close()
+    except Exception as _cache_display_exc:
+        log.warning("Hot tips cache display revalidation failed: %s", _cache_display_exc)
+        if raise_on_error:
+            raise
+        return []
+
+
+def _cached_tip_has_displayed_rollup(tip: dict) -> bool:
+    return bool(_filter_cached_hot_tips_by_display_flags([tip]))
+
+
+async def _revalidate_hot_tips_for_display(
+    tips: list[dict] | None,
+    *,
+    raise_on_error: bool = False,
+) -> list[dict]:
+    if not tips:
+        return []
+    existing_tips = list(tips)
+    try:
+        return await asyncio.to_thread(
+            _filter_cached_hot_tips_by_display_flags,
+            existing_tips,
+            raise_on_error=True,
+        )
+    except Exception as exc:
+        log.warning("Hot tips display revalidation unavailable; failing closed: %s", exc)
+        if raise_on_error:
+            raise
+        return []
 
 
 async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
@@ -10992,7 +11468,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
     # Fast path: return cached if fresh (no lock needed — read-only check)
     cache_entry = _hot_tips_cache.get("global")
     if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
-        return cache_entry["tips"]
+        return await _revalidate_hot_tips_for_display(cache_entry["tips"])
 
     # W84-P1: Prevent concurrent cold fetches — only ONE computation at a time.
     # If the precompute job is already running when a user taps Tips, the user's
@@ -11003,7 +11479,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
             # Re-check after acquiring: another compute may have just finished
             cache_entry = _hot_tips_cache.get("global")
             if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
-                return cache_entry["tips"]
+                return await _revalidate_hot_tips_for_display(cache_entry["tips"])
             return await _fetch_hot_tips_from_db_inner()
     # Lock not yet initialised (called before _post_init) — compute directly
     return await _fetch_hot_tips_from_db_inner()
@@ -11066,6 +11542,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     # divergence between the list path (which used live V2 outcome) and the detail
     # path (which uses edge_results.bet_type for narrative cache lookup).
     _er_outcomes: dict[str, str] = {}  # match_key → "home"/"away"/"draw"
+    _er_selection_visibility: dict[tuple[str, str], bool] | None = None
     if match_jobs:
         try:
             from scrapers.db_connect import connect_odds_db as _er_conn_fn
@@ -11076,14 +11553,22 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 zip([col[0] for col in cursor.description], row)
             )
             _er_today = _er_date_cls.today().isoformat()
-            _er_rows = _er_conn.execute("""
+            _er_display_filter = _edge_results_display_filter(_er_conn, "e")
+            _er_newer_display_filter = _edge_results_display_filter(_er_conn, "newer")
+            _er_visibility = _edge_results_selection_visibility(_er_conn, _er_today)
+            if _er_visibility is None:
+                raise RuntimeError("edge_results selection visibility lookup failed")
+            _er_selection_visibility = _er_visibility
+            _er_rows = _er_conn.execute(f"""
                 SELECT e.match_key, e.bet_type
                 FROM edge_results e
                 WHERE e.match_date >= ? AND e.result IS NULL
+                  {_er_display_filter}
                   AND NOT EXISTS (
                       SELECT 1 FROM edge_results newer
                       WHERE newer.match_key = e.match_key
                         AND newer.result IS NULL
+                        {_er_newer_display_filter}
                         AND (
                             COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
                             OR (
@@ -11098,14 +11583,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 _er_bt = (_er_row["bet_type"] or "").strip()
                 if _er_mk and _er_bt:
                     # Normalise "Home Win"/"Away Win" → "home"/"away"/"draw"
-                    if _er_bt == "Home Win":
-                        _er_outcomes[_er_mk] = "home"
-                    elif _er_bt == "Away Win":
-                        _er_outcomes[_er_mk] = "away"
-                    elif _er_bt.lower() in ("home", "away", "draw"):
-                        _er_outcomes[_er_mk] = _er_bt.lower()
-                    else:
-                        _er_outcomes[_er_mk] = "draw"
+                    _er_outcomes[_er_mk] = _normalise_edge_result_bet_type(_er_bt) or "draw"
             _er_conn.close()
         except Exception as _er_exc:
             log.debug("R12-BUILD-01: edge_results outcome lookup failed: %s", _er_exc)
@@ -11152,10 +11630,16 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 # inline so the gate doesn't skip this match on its first scan cycle.
                 _v2_live_outcome = _v2_result.get("outcome", "")
                 if _v2_live_outcome:
-                    _er_outcomes[match["match_id"]] = _v2_live_outcome
-                    predicted_outcome = _v2_live_outcome
+                    predicted_outcome = _normalise_edge_result_bet_type(_v2_live_outcome)
+                    _er_outcomes[match["match_id"]] = predicted_outcome
                 else:
                     continue  # V2 outcome also absent — skip (R15-BUILD-01 preserved)
+            if _er_selection_visibility is None:
+                log.debug("Hot tips live fallback suppressed while edge_results visibility is unavailable")
+                continue
+            if _er_selection_visibility.get((match["match_id"], predicted_outcome)) is False:
+                log.debug("Hot tips live fallback suppressed hidden edge_result %s/%s", match["match_id"], predicted_outcome)
+                continue
             # Fix 1: Hard-exclude draws (ALGO-FIX-01 8 Apr 2026)
             # Draws: 13.6% win rate, -43.2% ROI on 22 bets — no draw-specific signal
             if predicted_outcome == "draw":
@@ -11209,6 +11693,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         base_tip = {
             "event_id": event_id,
             "match_id": match["match_id"],
+            "edge_id": (_v2_result or {}).get("edge_id") or "",
+            "recommended_at": (_v2_result or {}).get("recommended_at") or "",
             "sport_key": _DB_LEAGUE_SPORT.get(league, config.LEAGUE_SPORT.get(league, "soccer")),
             "home_team": home_display,
             "away_team": away_display,
@@ -11327,6 +11813,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     # CARD-BUILD-01: Population gate
     from card_pipeline import verify_card_populates, _log_card_population_failure
     top_tips = [t for t in top_tips if verify_card_populates(t, t.get("match_id", ""))[0]]
+    top_tips = await asyncio.to_thread(_filter_cached_hot_tips_by_display_flags, top_tips)
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
 
@@ -12012,9 +12499,13 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
     from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_sa_odds, calculate_ev
     from scripts.odds_client import kelly_stake as calc_kelly
 
+    if await asyncio.to_thread(_edge_results_display_scope_active):
+        log.info("Odds API hot-tips fallback suppressed by active edge_results display scope")
+        return []
+
     cache_entry = _hot_tips_cache.get("global")
     if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
-        return cache_entry["tips"]
+        return await _revalidate_hot_tips_for_display(cache_entry["tips"])
 
     all_tips: list[dict] = []
     near_miss_tips: list[dict] = []
@@ -12360,10 +12851,12 @@ async def _build_hot_tips_page(
             _b12_conn = _b12_conn_fn(_b12_db_path)
             _b12_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
             _b12_ph = ",".join("?" * len(_pt_keys))
+            _b12_display_filter = _edge_results_display_filter(_b12_conn)
             _b12_rows = _b12_conn.execute(
                 f"SELECT match_key, edge_tier "
                 f"FROM edge_results "
                 f"WHERE match_key IN ({_b12_ph}) AND result IS NULL "
+                f"{_b12_display_filter} "
                 f"ORDER BY recommended_at DESC",
                 _pt_keys,
             ).fetchall()
@@ -12700,9 +13193,11 @@ def _blw_get_edge_id(match_key: str, db_path: str) -> str | None:
         _blw_c = _blw_conn_fn(db_path)
         import sqlite3 as _blw_sqlite
         _blw_c.row_factory = _blw_sqlite.Row
+        _blw_display_filter = _edge_results_display_filter(_blw_c)
         _blw_row = _blw_c.execute(
             "SELECT edge_id FROM edge_results "
             "WHERE match_key = ? AND result IS NULL "
+            f"{_blw_display_filter} "
             "ORDER BY id DESC LIMIT 1",
             (match_key,),
         ).fetchone()
@@ -12832,7 +13327,27 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     _ht_cache_state = "warm" if _hot_tips_cache.get("global", {}).get("tips") else "cold"
     _sentry_tags(flow="hot_tips", route="_do_hot_tips_flow", cache_state=_ht_cache_state)
     # W84-P0: Warm path — serve from cache instantly, no spinner
-    _cached_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+    _cache_entry = _hot_tips_cache.get("global", {})
+    _cached_tips = _cache_entry.get("tips", [])
+    if _cached_tips:
+        _cache_revalidation_failed = False
+        try:
+            _cached_tips = await asyncio.to_thread(
+                _filter_cached_hot_tips_by_display_flags,
+                _cached_tips,
+                raise_on_error=True,
+            )
+        except Exception as _cache_reval_exc:
+            log.warning(
+                "Warm hot tips display revalidation failed; preserving cache but not serving it: %s",
+                _cache_reval_exc,
+            )
+            _cached_tips = []
+            _cache_revalidation_failed = True
+        if _cached_tips:
+            _cache_entry["tips"] = _cached_tips
+        elif not _cache_revalidation_failed:
+            _hot_tips_cache.pop("global", None)
     if _cached_tips:
         _wm_tier = "bronze"
         _wm_rv = 999
@@ -13378,9 +13893,10 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Primary: in-memory hot tips cache (fastest, already computed)
     _cached = _hot_tips_cache.get("global", {}).get("tips", [])
     if _cached:
-        tips = list(_cached)
-    else:
-        # Cold path: load from DB
+        tips = await _revalidate_hot_tips_for_display(_cached)
+    if not tips:
+        # Cold path: load from DB when no cache exists, cache revalidation fails,
+        # or every cached tip was hidden by the display flag.
         try:
             tips = await _fetch_hot_tips_from_db()
         except Exception as _e:
@@ -13950,14 +14466,18 @@ def _refresh_er_outcomes_cache() -> None:
             zip([col[0] for col in cursor.description], row)
         )
         _today = _date_cls.today().isoformat()
-        _rows = _conn.execute("""
+        _display_filter = _edge_results_display_filter(_conn, "e")
+        _newer_display_filter = _edge_results_display_filter(_conn, "newer")
+        _rows = _conn.execute(f"""
             SELECT e.match_key, e.bet_type
             FROM edge_results e
             WHERE e.match_date >= ? AND e.result IS NULL
+              {_display_filter}
               AND NOT EXISTS (
                   SELECT 1 FROM edge_results newer
                   WHERE newer.match_key = e.match_key
                     AND newer.result IS NULL
+                    {_newer_display_filter}
                     AND (
                         COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
                         OR (
@@ -14526,9 +15046,11 @@ def _quick_edge_tier_lookup(match_id: str) -> str | None:
         from scrapers.edge.edge_config import DB_PATH as _qetl_db
         _qetl_conn = _qetl_fn(_qetl_db)
         try:
+            _qetl_display_filter = _edge_results_display_filter(_qetl_conn)
             row = _qetl_conn.execute(
                 "SELECT edge_tier FROM edge_results "
                 "WHERE match_key = ? AND result IS NULL "
+                f"{_qetl_display_filter} "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_id,),
             ).fetchone()
@@ -14563,9 +15085,11 @@ def _quick_ev_lookup(match_id: str) -> float | None:
         from scrapers.edge.edge_config import DB_PATH as _qev_db
         _qev_conn = _qev_fn(_qev_db)
         try:
+            _qev_display_filter = _edge_results_display_filter(_qev_conn)
             row = _qev_conn.execute(
                 "SELECT predicted_ev FROM edge_results "
                 "WHERE match_key = ? AND result IS NULL "
+                f"{_qev_display_filter} "
                 "AND recommended_at > datetime('now', '-4 hours') "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_id,),
@@ -14888,8 +15412,10 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 # Fallback: look up league from edge_results
                 if not _w82_league:
                     try:
+                        _w82_display_filter = _edge_results_display_filter(conn)
                         _lr = conn.execute(
-                            "SELECT league FROM edge_results WHERE match_key = ? LIMIT 1",
+                            "SELECT league FROM edge_results WHERE match_key = ? "
+                            f"{_w82_display_filter} LIMIT 1",
                             (match_id,),
                         ).fetchone()
                         if _lr:
@@ -15426,9 +15952,11 @@ async def _get_current_ev_for_match(match_key: str) -> float | None:
             from scrapers.db_connect import connect_odds_db as _conn_fn
             from scrapers.edge.edge_config import DB_PATH as _DB_PATH
             _conn = _conn_fn(_DB_PATH)
+            _display_filter = _edge_results_display_filter(_conn)
             row = _conn.execute(
                 "SELECT predicted_ev, bet_type, sport, league FROM edge_results "
                 "WHERE match_key = ? AND result IS NULL "
+                f"{_display_filter} "
                 "ORDER BY id DESC LIMIT 1",
                 (match_key,),
             ).fetchone()
@@ -20973,12 +21501,14 @@ def _enrich_edge_data_from_db(match_key: str, outcome: str) -> dict:
             zip([col[0] for col in cursor.description], row)
         )
         try:
+            _display_filter = _edge_results_display_filter(_conn)
             # Prefer outcome-specific row; fall back to any result-pending row for this match
             row = _conn.execute(
                 "SELECT composite_score, recommended_odds, bookmaker, "
                 "predicted_ev, league, confirming_signals "
                 "FROM edge_results "
                 "WHERE match_key = ? AND bet_type = ? AND result IS NULL "
+                f"{_display_filter} "
                 "ORDER BY recommended_at DESC, id DESC LIMIT 1",
                 (match_key, outcome),
             ).fetchone()
@@ -20988,6 +21518,7 @@ def _enrich_edge_data_from_db(match_key: str, outcome: str) -> dict:
                     "predicted_ev, league, confirming_signals "
                     "FROM edge_results "
                     "WHERE match_key = ? AND result IS NULL "
+                    f"{_display_filter} "
                     "ORDER BY recommended_at DESC, id DESC LIMIT 1",
                     (match_key,),
                 ).fetchone()
@@ -21772,9 +22303,11 @@ def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
         _conn = connect_odds_db(DB_PATH)
         _conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
         try:
+            _display_filter = _edge_results_display_filter(_conn)
             _row = _conn.execute(
                 "SELECT predicted_ev, recommended_odds, bookmaker "
                 "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                f"{_display_filter} "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_key,),
             ).fetchone()
@@ -21799,6 +22332,73 @@ def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
     except Exception:
         pass
     return html
+
+
+def _tips_with_display_match_key(tips: list[dict] | None, match_key: str) -> list[dict]:
+    if not tips:
+        return []
+    prepared: list[dict] = []
+    for tip in tips:
+        if not isinstance(tip, dict):
+            continue
+        if match_key:
+            tip = {**tip, "match_id": match_key, "match_key": match_key}
+        prepared.append(tip)
+    return prepared
+
+
+async def _revalidate_game_tips_for_display(
+    event_id: str,
+    tips: list[dict] | None,
+    *,
+    match_key: str | None = None,
+    context: str = "game cache",
+) -> list[dict] | None:
+    """Re-check cached game-analysis tips against current edge_results display state.
+
+    Returns None when DB/schema validation failed, so callers fail closed without
+    erasing caches on transient DB contention. Returns [] when validation
+    succeeded and no displayed edge remains, pruning stale game-analysis caches.
+    """
+    check_key = match_key or event_id
+    prepared = _tips_with_display_match_key(tips, check_key)
+    if not prepared:
+        _game_tips_cache.pop(event_id, None)
+        _analysis_cache.pop(event_id, None)
+        return []
+    try:
+        visible = await _revalidate_hot_tips_for_display(
+            prepared,
+            raise_on_error=True,
+        )
+    except Exception as exc:
+        log.warning("%s display revalidation failed for %s: %s", context, check_key, exc)
+        return None
+    if visible:
+        _game_tips_cache[event_id] = visible
+        return visible
+    _game_tips_cache.pop(event_id, None)
+    _analysis_cache.pop(event_id, None)
+    return []
+
+
+async def _serve_game_edge_unavailable(
+    query,
+    *,
+    user_id: int,
+    event_id: str,
+    source: str,
+) -> None:
+    if source == "edge_picks":
+        rows = _build_hot_tips_detail_rows(user_id, match_key=event_id)
+    else:
+        rows = [[InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")]]
+    await query.edit_message_text(
+        "⚡ <b>Edge no longer available</b>\n\n"
+        "This edge has been removed from the active Edge Picks set.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
 
 
 # ── BUILD-MYMATCHES-CARD-OVERHAUL-01: Non-Edge card helpers ──────────────
@@ -22181,10 +22781,23 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             cached_msg, cached_tips, cached_ts = cached
             cached_edge_tier = "bronze"
         if _time.time() - cached_ts < _ANALYSIS_CACHE_TTL:
+            cached_visible_tips = await _revalidate_game_tips_for_display(
+                event_id,
+                cached_tips,
+                match_key=event_id,
+                context="analysis cache",
+            )
+            if not cached_visible_tips:
+                await _serve_game_edge_unavailable(
+                    query,
+                    user_id=user_id,
+                    event_id=event_id,
+                    source=source,
+                )
+                return
             # Wave 26A: fetch user tier only when needed (after cache check)
             _ggt_tier = await get_effective_tier(user_id)
-            _game_tips_cache[event_id] = cached_tips
-            buttons = _build_game_buttons(cached_tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=cached_edge_tier, has_narrative=True)
+            buttons = _build_game_buttons(cached_visible_tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=cached_edge_tier, has_narrative=True)
             await query.edit_message_text(
                 cached_msg, parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -22226,6 +22839,26 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             if target_event:
                 _ea_home = target_event.get("home_team") or _ea_home
                 _ea_away = target_event.get("away_team") or _ea_away
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _early_db_hit["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = _ea_home
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = _ea_away
+            _ea_visible_tips = await _revalidate_game_tips_for_display(
+                event_id,
+                _early_db_hit["tips"],
+                match_key=event_id,
+                context="early narrative cache",
+            )
+            if not _ea_visible_tips:
+                await _serve_game_edge_unavailable(
+                    query,
+                    user_id=user_id,
+                    event_id=event_id,
+                    source=source,
+                )
+                return
             _ea_hdr = _build_event_header(_ea_home, _ea_away, target_league or "", target_event)
             _ea_html = _inject_narrative_header(
                 _early_db_hit["html"], _ea_home, _ea_away,
@@ -22249,20 +22882,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _ea_fresh_tier = None
             _ea_tier = _ea_fresh_tier or _early_db_hit.get("edge_tier", "bronze")
             _analysis_cache[event_id] = (
-                _ea_html, _early_db_hit["tips"],
+                _ea_html, _ea_visible_tips,
                 _ea_tier,
                 _early_db_hit.get("narrative_source"),
                 _time.time(),
             )
-            _game_tips_cache[event_id] = _early_db_hit["tips"]
-            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
-            for _ct in _early_db_hit["tips"]:
-                if not _ct.get("home_team"):
-                    _ct["home_team"] = _ea_home
-                if not _ct.get("away_team"):
-                    _ct["away_team"] = _ea_away
+            _game_tips_cache[event_id] = _ea_visible_tips
             buttons = _build_game_buttons(
-                _early_db_hit["tips"], event_id, user_id,
+                _ea_visible_tips, event_id, user_id,
                 source=source, user_tier=_ggt_tier,
                 edge_tier=_ea_tier, has_narrative=True,
             )
@@ -22322,14 +22949,27 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                                     "display_tier": _ac7_card.get("tier", "bronze"),
                                     "match_id": event_id,
                                 }
-                                _game_tips_cache[event_id] = [_ac7_tip]
+                                _ac7_visible_tips = await _revalidate_game_tips_for_display(
+                                    event_id,
+                                    [_ac7_tip],
+                                    match_key=event_id,
+                                    context="AC-7 card cache",
+                                )
+                                if not _ac7_visible_tips:
+                                    await _serve_game_edge_unavailable(
+                                        query,
+                                        user_id=user_id,
+                                        event_id=event_id,
+                                        source=source,
+                                    )
+                                    return
                                 _ac7_tier = _ac7_card.get("tier", "bronze")
                                 _analysis_cache[event_id] = (
-                                    _ac7_html, [_ac7_tip], _ac7_tier,
+                                    _ac7_html, _ac7_visible_tips, _ac7_tier,
                                     "p1p3_card", _time.time(),
                                 )
                                 _ac7_buttons = _build_game_buttons(
-                                    [_ac7_tip], event_id, user_id,
+                                    _ac7_visible_tips, event_id, user_id,
                                     source=source, user_tier=_ggt_tier,
                                     edge_tier=_ac7_tier, has_narrative=True,
                                 )
@@ -22469,6 +23109,26 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         except Exception:
             _pre_cached = None
         if _pre_cached:
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _pre_cached["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
+            _pre_visible_tips = await _revalidate_game_tips_for_display(
+                event_id,
+                _pre_cached["tips"],
+                match_key=_pre_mid,
+                context="pre-spinner narrative cache",
+            )
+            if not _pre_visible_tips:
+                await _serve_game_edge_unavailable(
+                    query,
+                    user_id=user_id,
+                    event_id=event_id,
+                    source=source,
+                )
+                return
             # W84-Q7: Inject fresh header — cached HTML may have stale/missing kickoff+TV
             _phdr = _build_event_header(home_raw, away_raw, target_league or "", target_event)
             _p_html = _inject_narrative_header(
@@ -22484,20 +23144,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             except Exception:
                 pass
             _analysis_cache[event_id] = (
-                _p_html, _pre_cached["tips"],
+                _p_html, _pre_visible_tips,
                 _pre_cached["edge_tier"],
                 _pre_cached.get("narrative_source"),
                 _time.time(),
             )
-            _game_tips_cache[event_id] = _pre_cached["tips"]
-            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
-            for _ct in _pre_cached["tips"]:
-                if not _ct.get("home_team"):
-                    _ct["home_team"] = home_raw
-                if not _ct.get("away_team"):
-                    _ct["away_team"] = away_raw
+            _game_tips_cache[event_id] = _pre_visible_tips
             _pre_buttons = _build_game_buttons(
-                _pre_cached["tips"], event_id, user_id,
+                _pre_visible_tips, event_id, user_id,
                 source=source, user_tier=_ggt_tier,
                 edge_tier=_pre_cached["edge_tier"], has_narrative=True,
             )
@@ -22591,6 +23245,29 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         except Exception:
             _cached_db = None
         if _cached_db:
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _cached_db["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
+            _cached_visible_tips = await _revalidate_game_tips_for_display(
+                event_id,
+                _cached_db["tips"],
+                match_key=db_match_id,
+                context="W60 narrative cache",
+            )
+            if not _cached_visible_tips:
+                _spinner_stop.set()
+                await _spinner_task
+                _ctx_task.cancel()
+                await _serve_game_edge_unavailable(
+                    query,
+                    user_id=user_id,
+                    event_id=event_id,
+                    source=source,
+                )
+                return
             # W84-Q7: Inject fresh header — cached HTML may have stale/missing kickoff+TV
             _bhdr = _build_event_header(home_raw, away_raw, target_league or "", target_event)
             _b_html = _inject_narrative_header(
@@ -22606,23 +23283,17 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             except Exception:
                 pass
             _analysis_cache[event_id] = (
-                _b_html, _cached_db["tips"],
+                _b_html, _cached_visible_tips,
                 _cached_db["edge_tier"],
                 _cached_db.get("narrative_source"),
                 _time.time(),
             )
-            _game_tips_cache[event_id] = _cached_db["tips"]
-            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
-            for _ct in _cached_db["tips"]:
-                if not _ct.get("home_team"):
-                    _ct["home_team"] = home_raw
-                if not _ct.get("away_team"):
-                    _ct["away_team"] = away_raw
+            _game_tips_cache[event_id] = _cached_visible_tips
             _spinner_stop.set()
             await _spinner_task
             _ctx_task.cancel()
             buttons = _build_game_buttons(
-                _cached_db["tips"], event_id, user_id,
+                _cached_visible_tips, event_id, user_id,
                 source=source, user_tier=_ggt_tier,
                 edge_tier=_cached_db["edge_tier"], has_narrative=True,
             )
@@ -22752,6 +23423,25 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # ALGO-FIX-01 parity — strip draws before sort/cache (INV-DRAW-REGRESSION-01)
     tips = [t for t in tips if (t.get("outcome") or "").lower() != "draw"]
+    if tips:
+        _fresh_visible_tips = await _revalidate_game_tips_for_display(
+            event_id,
+            tips,
+            match_key=db_match_id or event_id,
+            context="fresh game tips",
+        )
+        if not _fresh_visible_tips:
+            _spinner_stop.set()
+            await _spinner_task
+            _ctx_task.cancel()
+            await _serve_game_edge_unavailable(
+                query,
+                user_id=user_id,
+                event_id=event_id,
+                source=source,
+            )
+            return
+        tips = _fresh_visible_tips
     # Sort and cache tips if we have any
     if tips:
         tips.sort(key=lambda t: t["ev"], reverse=True)
@@ -24033,6 +24723,24 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
     tip = tips[tip_idx]
     user_id = query.from_user.id
+    if not await asyncio.to_thread(_cached_tip_has_displayed_rollup, tip):
+        try:
+            _game_tips_cache[event_id] = await _revalidate_hot_tips_for_display(
+                tips,
+                raise_on_error=True,
+            )
+        except Exception:
+            pass
+        await query.edit_message_text(
+            "⚡ <b>Edge no longer available</b>\n\n"
+            "This edge has been removed from the active Edge Picks set.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                user_id,
+                match_key=event_id,
+            )),
+        )
+        return
     _sentry_user(user_id)
     _sentry_tags(flow="tip_detail", route="handle_tip_detail", event_id=event_id)
     match_key = tip.get("match_id", "") or tip.get("event_id", "") or event_id
@@ -24550,7 +25258,19 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     # TIER-GATE-IMPL-01: Gate odds comparison — no odds for blurred/locked/partial
     _oc_user_id = query.from_user.id
     _oc_user_tier = await get_effective_tier(_oc_user_id)
-    tips = _game_tips_cache.get(event_id, [])
+    _oc_revalidation_failed = False
+    try:
+        tips = await _revalidate_hot_tips_for_display(
+            _game_tips_cache.get(event_id, []),
+            raise_on_error=True,
+        )
+    except Exception:
+        tips = []
+        _oc_revalidation_failed = True
+    if tips:
+        _game_tips_cache[event_id] = tips
+    elif not _oc_revalidation_failed:
+        _game_tips_cache.pop(event_id, None)
     if tips:
         _oc_edge_tier = str(tips[0].get("display_tier", tips[0].get("edge_rating", "bronze"))).lower().strip()
         from tier_gate import get_edge_access_level as _oc_access_fn
@@ -26144,6 +26864,65 @@ def _tier_fire_alerts_row_version(row: dict) -> str:
     )
 
 
+def _tier_fire_claim_still_displayed(edge_id: str, claim_id: str, row: dict) -> bool:
+    """Return True only if a claimed alert row is still display-eligible."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _tfcs_conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _tfcs_db
+        _tfcs_conn = _tfcs_conn_fn(_tfcs_db)
+        try:
+            if not _edge_results_display_filter(_tfcs_conn):
+                return True
+            found = _tfcs_conn.execute(
+                """
+                SELECT 1
+                FROM edge_results
+                WHERE edge_id = ?
+                  AND posted_to_alerts_direct = 0
+                  AND posted_to_alerts_direct_claim_id = ?
+                  AND result IS NULL
+                  AND match_key = ?
+                  AND recommended_at = ?
+                  AND edge_tier = ?
+                  AND bet_type = ?
+                  AND recommended_odds = ?
+                  AND bookmaker = ?
+                  AND predicted_ev = ?
+                  AND league = ?
+                  AND match_date = ?
+                  AND composite_score = ?
+                  AND COALESCE(is_displayed_in_rollups, 0) = 1
+                  AND (
+                    (confirming_signals IS NULL AND ? IS NULL)
+                    OR confirming_signals = ?
+                  )
+                LIMIT 1
+                """,
+                (
+                    edge_id,
+                    claim_id,
+                    row.get("match_key") or "",
+                    row.get("recommended_at") or "",
+                    row.get("edge_tier") or "",
+                    row.get("bet_type") or "",
+                    row.get("recommended_odds") or 0,
+                    row.get("bookmaker") or "",
+                    row.get("predicted_ev") or 0,
+                    row.get("league") or "",
+                    row.get("match_date") or "",
+                    row.get("composite_score") or 0,
+                    row.get("confirming_signals"),
+                    row.get("confirming_signals"),
+                ),
+            ).fetchone()
+            return found is not None
+        finally:
+            _tfcs_conn.close()
+    except Exception as _tfcs_exc:
+        log.warning("_tier_fire_claim_still_displayed failed for edge_id=%s: %s", edge_id, _tfcs_exc)
+        return False
+
+
 def _ensure_tier_fire_diamond_dm_log_schema(conn) -> None:
     conn.execute(
         """
@@ -26500,9 +27279,15 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _ensure_tier_fire_alerts_schema(_tfa_db)
         _tfa_conn = _tfa_conn_fn(_tfa_db)
         _tfa_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        _tfa_display_filter = _edge_results_display_filter(_tfa_conn, "e")
+        _tfa_update_display_filter = (
+            "AND COALESCE(is_displayed_in_rollups, 0) = 1 "
+            if _tfa_display_filter
+            else ""
+        )
         try:
             _tfa_rows = _tfa_conn.execute(
-                """
+                f"""
                 SELECT e.edge_id, e.match_key, e.edge_tier, e.bet_type,
                        e.recommended_odds, e.bookmaker, e.predicted_ev,
                        e.league, e.match_date, e.recommended_at,
@@ -26510,6 +27295,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 FROM edge_results e
                 WHERE e.result IS NULL
                   AND e.edge_tier IN ('gold', 'diamond')
+                  {_tfa_display_filter}
                   AND e.posted_to_alerts_direct = 0
                   AND (
                     e.posted_to_alerts_direct_claim_id IS NULL
@@ -26550,7 +27336,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _tfa_claim_id = _tfa_uuid.uuid4().hex
         try:
             _tfa_claimed = _db_write_retry(
-                "UPDATE edge_results "
+                f"UPDATE edge_results "
                 "SET posted_to_alerts_direct_claimed_at = datetime('now'), "
                 "posted_to_alerts_direct_claim_id = ? "
                 "WHERE edge_id = ? "
@@ -26564,6 +27350,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "AND league = ? "
                 "AND match_date = ? "
                 "AND composite_score = ? "
+                f"{_tfa_update_display_filter}"
                 "AND ("
                 "  (confirming_signals IS NULL AND ? IS NULL) "
                 "  OR confirming_signals = ?"
@@ -26658,6 +27445,35 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "",
         )
 
+        if not await asyncio.to_thread(
+            _tier_fire_claim_still_displayed,
+            _tfa_edge_id,
+            _tfa_claim_id,
+            _tfa_row,
+        ):
+            try:
+                _db_write_retry(
+                    "UPDATE edge_results SET posted_to_alerts_direct_claimed_at = NULL "
+                    ", posted_to_alerts_direct_claim_id = NULL "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
+                    "AND posted_to_alerts_direct_claim_id = ?",
+                    (_tfa_edge_id, _tfa_claim_id),
+                    retries=5,
+                    backoff_ms=200,
+                )
+            except Exception as _tfa_release_exc:
+                log.error(
+                    "_tier_fire_alerts_job: release failed after display recheck "
+                    "edge_id=%s: %s",
+                    _tfa_edge_id,
+                    _tfa_release_exc,
+                )
+            log.warning(
+                "_tier_fire_alerts_job: display recheck skipped edge_id=%s before send",
+                _tfa_edge_id,
+            )
+            continue
+
         try:
             _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
         except Exception as _tfa_post_exc:
@@ -26731,7 +27547,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # AC-F: mark posted_to_alerts_direct=1 after successful claimed send.
             try:
                 _tfa_marked = _db_write_retry(
-                    "UPDATE edge_results SET posted_to_alerts_direct = 1 "
+                    f"UPDATE edge_results SET posted_to_alerts_direct = 1 "
                     ", posted_to_alerts_direct_claimed_at = NULL "
                     ", posted_to_alerts_direct_claim_id = NULL "
                     "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
@@ -29736,6 +30552,45 @@ def _kickoff_for_match_key(match_key: str):
         return None
 
 
+def _pre_match_edge_still_displayed(edge: dict, match_date: str) -> bool:
+    """Revalidate a pre-match alert edge against the display flag before send."""
+    try:
+        from scrapers.db_connect import connect_odds_db  # noqa: PLC0415
+        from scrapers.edge.edge_config import DB_PATH  # noqa: PLC0415
+        conn = connect_odds_db(DB_PATH)
+        try:
+            _display_filter = _edge_results_display_filter(conn)
+            if not _display_filter:
+                return True
+            clauses = [
+                "match_date = ?",
+                "result IS NULL",
+                "edge_tier IN ('gold', 'diamond')",
+                "COALESCE(is_displayed_in_rollups, 0) = 1",
+            ]
+            params: list = [match_date]
+            edge_id = edge.get("edge_id")
+            if edge_id:
+                clauses.append("edge_id = ?")
+                params.append(edge_id)
+            else:
+                clauses.append("match_key = ?")
+                params.append(edge.get("match_key") or "")
+                if edge.get("bet_type"):
+                    clauses.append("bet_type = ?")
+                    params.append(edge.get("bet_type"))
+            row = conn.execute(
+                "SELECT 1 FROM edge_results WHERE " + " AND ".join(clauses) + " LIMIT 1",
+                params,
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("_pre_match_edge_still_displayed failed for %s: %s", edge.get("match_key"), exc)
+        return False
+
+
 async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Hourly: send audible pre-match alert when Gold/Diamond edges kick off in 2-4h.
 
@@ -29766,13 +30621,15 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _pma_conn.row_factory = lambda c, r: dict(
             zip([col[0] for col in c.description], r)
         )
+        _pma_display_filter = _edge_results_display_filter(_pma_conn)
         gold_rows = _pma_conn.execute(
-            """
-            SELECT match_key, edge_tier, bet_type, recommended_odds,
+            f"""
+            SELECT edge_id, match_key, edge_tier, bet_type, recommended_odds,
                    bookmaker, predicted_ev, league, composite_score
             FROM edge_results
             WHERE match_date = ? AND result IS NULL
               AND edge_tier IN ('gold', 'diamond')
+              {_pma_display_filter}
             ORDER BY composite_score DESC
             """,
             (today,),
@@ -29804,8 +30661,16 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             continue
         hours_until = (kickoff - now).total_seconds() / 3600
         if 2.0 <= hours_until <= 4.0:
-            qualifying.append(edge)
+            qualifying.append({**edge, "_hours_until": hours_until})
 
+    if not qualifying:
+        return
+
+    _still_displayed: list[dict] = []
+    for edge in qualifying:
+        if await asyncio.to_thread(_pre_match_edge_still_displayed, edge, today):
+            _still_displayed.append(edge)
+    qualifying = _still_displayed
     if not qualifying:
         return
 
@@ -29817,6 +30682,7 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     users = await db.get_all_onboarded_users()
     sent_count = 0
+    sent_match_keys: set[str] = set()
 
     # P3-06: Pre-load edge sport key for filter checks
     _edge_sports = set()
@@ -29852,7 +30718,13 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             audible = await asyncio.to_thread(_nb.can_send_audible, user.id)
 
             # Build card for first qualifying edge (most important)
-            _pma_edge = qualifying[0]
+            _pma_edge = None
+            for _candidate in qualifying:
+                if await asyncio.to_thread(_pre_match_edge_still_displayed, _candidate, today):
+                    _pma_edge = _candidate
+                    break
+            if not _pma_edge:
+                continue
             _pma_match = _display_team_name(_pma_edge["match_key"])
             _pma_tier = _pma_edge["edge_tier"]
             _pma_tier_emoji = _pma_emojis.get(_pma_tier, "")
@@ -29861,6 +30733,7 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _pma_bk_key = (_pma_edge.get("bookmaker") or "").lower()
             _pma_league = _pma_edge.get("league", "")
             _pma_bk_url = config.get_affiliate_url()
+            hours_until = float(_pma_edge.get("_hours_until") or 0)
             _pma_hours_h = int(hours_until)
             _pma_hours_m = int((hours_until - _pma_hours_h) * 60)
             _pma_kickoff_in = f"{_pma_hours_h}h {_pma_hours_m:02d}m" if _pma_hours_h > 0 else f"{_pma_hours_m}m"
@@ -29889,12 +30762,14 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await asyncio.to_thread(_nb.record_audible, user.id)
             await _after_send(user.id)
             sent_count += 1
+            sent_match_keys.add(_pma_edge["match_key"])
         except Exception as exc:
             log.debug("Pre-match alert: failed to send to user %d: %s", user.id, exc)
 
-    # Mark these edges as sent today (do this once, regardless of users reached)
+    # Mark only edges that survived final display revalidation and reached a user.
     for edge in qualifying:
-        already_sent.add(edge["match_key"])
+        if edge["match_key"] in sent_match_keys:
+            already_sent.add(edge["match_key"])
 
     log.info("Pre-match gold alert: sent to %d users", sent_count)
 

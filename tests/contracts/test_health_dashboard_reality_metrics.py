@@ -133,7 +133,8 @@ def test_brl_orphan_rate_uses_joined_calibration_denominator(monkeypatch):
             sport TEXT,
             league TEXT,
             result TEXT,
-            recommended_at TEXT
+            recommended_at TEXT,
+            is_displayed_in_rollups INTEGER
         );
         CREATE TABLE bet_recommendations_log (
             edge_id TEXT,
@@ -149,13 +150,13 @@ def test_brl_orphan_rate_uses_joined_calibration_denominator(monkeypatch):
         """
     )
     conn.execute(
-        "INSERT INTO edge_results VALUES ('edge_old_logged','old_logged','football','epl',NULL,datetime('now','-2 hours'))"
+        "INSERT INTO edge_results VALUES ('edge_old_logged','old_logged','football','epl',NULL,datetime('now','-2 hours'),1)"
     )
     conn.execute(
-        "INSERT INTO edge_results VALUES ('edge_recent','recent','football','epl',NULL,datetime('now','-20 minutes'))"
+        "INSERT INTO edge_results VALUES ('edge_recent','recent','football','epl',NULL,datetime('now','-20 minutes'),1)"
     )
     conn.execute(
-        "INSERT INTO edge_results VALUES ('edge_settled','settled','football','epl','hit',datetime('now','-2 hours'))"
+        "INSERT INTO edge_results VALUES ('edge_settled','settled','football','epl','hit',datetime('now','-2 hours'),1)"
     )
     conn.execute(
         "INSERT INTO bet_recommendations_log VALUES ('edge_old_logged',datetime('now','-2 hours'))"
@@ -207,3 +208,65 @@ def test_brl_orphan_rate_uses_joined_calibration_denominator(monkeypatch):
     assert "BRL Orphan Rate (24h)" in html
     assert "0.0<span" in html
     assert "1/1 edges logged" in html
+
+
+def test_performance_clv_kpi_uses_displayed_edge_cohort(monkeypatch):
+    from dashboard import health_dashboard as dash
+
+    conn = _conn()
+    conn.executescript(
+        """
+        CREATE TABLE edge_results (
+            match_key TEXT,
+            sport TEXT,
+            edge_tier TEXT,
+            result TEXT,
+            predicted_ev REAL,
+            actual_return REAL,
+            recommended_odds REAL,
+            settled_at TEXT,
+            match_date TEXT,
+            bookmaker TEXT,
+            bet_type TEXT,
+            is_displayed_in_rollups INTEGER
+        );
+        CREATE TABLE clv_tracking (
+            match_key TEXT,
+            selection TEXT,
+            clv REAL
+        );
+        """
+    )
+    match_key = "displayed_home_vs_hidden_away_2026-05-07"
+    conn.execute(
+        """
+        INSERT INTO edge_results VALUES (
+            ?, 'football', 'gold', 'hit', 5.0, 200.0,
+            2.0, datetime('now','-2 hours'), date('now'), 'betway',
+            'Home Win', 1
+        )
+        """,
+        (match_key,),
+    )
+    conn.execute(
+        """
+        INSERT INTO edge_results VALUES (
+            ?, 'football', 'gold', 'hit', 5.0, 200.0,
+            2.0, datetime('now','-2 hours'), date('now'), 'betway',
+            'Away Win', 0
+        )
+        """,
+        (match_key,),
+    )
+    conn.executemany(
+        "INSERT INTO clv_tracking VALUES (?, ?, ?)",
+        [
+            (match_key, "displayed_home", 0.1),
+            (match_key, "hidden_away", -0.5),
+        ],
+    )
+
+    html = dash.render_performance_content(conn)
+
+    assert "+0.100" in html
+    assert "100.0% positive (1 samples)" in html

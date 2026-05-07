@@ -29,7 +29,8 @@ def _create_alerts_edge_db(db_path: str) -> None:
                 result TEXT,
                 posted_to_alerts_direct INTEGER DEFAULT 0,
                 posted_to_alerts_direct_claimed_at TEXT,
-                posted_to_alerts_direct_claim_id TEXT
+                posted_to_alerts_direct_claim_id TEXT,
+                is_displayed_in_rollups INTEGER DEFAULT 1
             )
             """
         )
@@ -1326,6 +1327,136 @@ async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_p
     await bot._tier_fire_alerts_job(SimpleNamespace())
 
     assert sends == []
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_alerts_claim_revalidates_display_flag(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    original_db_write_retry = bot._db_write_retry
+
+    def hide_before_claim(sql, params, *args, **kwargs):
+        if "SET posted_to_alerts_direct_claimed_at" in sql:
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    "UPDATE edge_results SET is_displayed_in_rollups = 0 "
+                    "WHERE edge_id = ?",
+                    ("edge_contract_alerts_dedup_01",),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return original_db_write_retry(sql, params, *args, **kwargs)
+
+    sends: list[str] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        sends.append(edge_id)
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(bot, "_db_write_retry", hide_before_claim)
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert sends == []
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_alerts_rechecks_display_before_send(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    original_recheck = bot._tier_fire_claim_still_displayed
+
+    def hide_before_send(edge_id, claim_id, row):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE edge_results SET is_displayed_in_rollups = 0 "
+                "WHERE edge_id = ?",
+                (edge_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return original_recheck(edge_id, claim_id, row)
+
+    sends: list[str] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        sends.append(edge_id)
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(bot, "_tier_fire_claim_still_displayed", hide_before_send)
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert sends == []
+    assert row == (0, None)
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_alerts_final_mark_records_success_after_display_flip(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE edge_results SET is_displayed_in_rollups = 0 "
+                "WHERE edge_id = ?",
+                (edge_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == (1, None)
 
 
 @pytest.mark.asyncio

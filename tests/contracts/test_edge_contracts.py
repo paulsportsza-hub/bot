@@ -322,7 +322,8 @@ class TestListPathTierConsistency:
                 recommended_at DATETIME NOT NULL,
                 settled_at DATETIME,
                 match_date DATE NOT NULL,
-                confirming_signals INTEGER DEFAULT NULL
+                confirming_signals INTEGER DEFAULT NULL,
+                is_displayed_in_rollups INTEGER DEFAULT 1
             );
         """)
         from datetime import datetime, date

@@ -224,6 +224,29 @@ def _alert_edge_ops(message: str) -> None:
 
 # ── Step 1: Select single top-tier pick ───────────────────────────────────────
 
+def _edge_results_display_filter(conn, alias: str = "") -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f"AND COALESCE({prefix}is_displayed_in_rollups, 0) = 1"
+
+
 def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
     """Return (tier, row) for the highest-tier qualifying unsettled edge.
     Tries tiers Diamond → Gold → Silver → Bronze and returns the first match that
@@ -242,6 +265,7 @@ def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
         LEFT JOIN fixture_mapping f ON e.match_key = f.match_key
         WHERE e.result IS NULL
           AND e.edge_tier = ?
+          {display_filter}
         ORDER BY e.composite_score DESC
         LIMIT 10
     """
@@ -263,8 +287,9 @@ def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
         from scrapers.db_connect import connect_odds_db as _rg_conn
         conn = _rg_conn(SCRAPERS_DB, timeout=15)
         conn.row_factory = sqlite3.Row
+        display_filter = _edge_results_display_filter(conn, "e")
         for tier in tiers_to_check:
-            rows = conn.execute(sql, (tier,)).fetchall()
+            rows = conn.execute(sql.format(display_filter=display_filter), (tier,)).fetchall()
             if not rows:
                 log.info("[SELECT] %s tier — no qualifying edge", tier.upper())
                 continue

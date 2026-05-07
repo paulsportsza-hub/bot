@@ -387,6 +387,85 @@ def table_exists(conn, name: str) -> bool:
     return r is not None
 
 
+def edge_results_display_filter(conn, alias: str = "") -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f"AND COALESCE({prefix}is_displayed_in_rollups, 0) = 1"
+
+
+def _table_has_column(conn, table_name: str, column_name: str) -> bool:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return False
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                continue
+        if name == column_name:
+            return True
+    return False
+
+
+def clv_edge_join_condition(conn) -> str:
+    if not (
+        _table_has_column(conn, "clv_tracking", "selection")
+        and _table_has_column(conn, "edge_results", "bet_type")
+    ):
+        return "er.match_key = ct.match_key"
+
+    match_no_date = "substr(er.match_key, 1, length(er.match_key) - 11)"
+    home_key = (
+        f"substr({match_no_date}, 1, instr({match_no_date}, '_vs_') - 1)"
+    )
+    away_key = f"substr({match_no_date}, instr({match_no_date}, '_vs_') + 4)"
+    return f"""
+            er.match_key = ct.match_key
+            AND (
+                ct.selection IS NULL
+                OR TRIM(ct.selection) = ''
+                OR LOWER(TRIM(ct.selection)) = LOWER(TRIM(er.bet_type))
+                OR (
+                    LOWER(TRIM(er.bet_type)) IN ('home', '1', 'home win')
+                    AND LOWER(TRIM(ct.selection)) IN (
+                        'home', '1', LOWER(TRIM({home_key}))
+                    )
+                )
+                OR (
+                    LOWER(TRIM(er.bet_type)) IN ('away', '2', 'away win')
+                    AND LOWER(TRIM(ct.selection)) IN (
+                        'away', '2', LOWER(TRIM({away_key}))
+                    )
+                )
+                OR (
+                    LOWER(TRIM(er.bet_type)) IN ('draw', 'x')
+                    AND LOWER(TRIM(ct.selection)) IN ('draw', 'x')
+                )
+            )
+    """
+
+
 def _fetch_alerts_send_log(conn, limit: int = 10) -> list[dict]:
     """Fetch recent Alerts bot sends from alerts_send_log (AC-A event-driven feed)."""
     if not table_exists(conn, "alerts_send_log"):
@@ -3223,11 +3302,13 @@ def build_edge_tier_panel(conn) -> str:
     """Build HTML panel showing daily edge counts by tier for last 7 days."""
     if conn is None or not table_exists(conn, "edge_results"):
         return ""
+    display_filter = edge_results_display_filter(conn)
     try:
-        rows = q_all(conn, """
+        rows = q_all(conn, f"""
             SELECT date(recommended_at) AS day, edge_tier, COUNT(*) AS cnt
             FROM edge_results
             WHERE date(recommended_at) >= date('now', '-7 days')
+              {display_filter}
             GROUP BY day, edge_tier
             ORDER BY day DESC, edge_tier
         """)
@@ -7854,14 +7935,18 @@ def render_performance_content(conn) -> str:
     """Render the Edge Performance inner content HTML (no shell)."""
     now_sast = datetime.now(_SAST)
     updated = now_sast.strftime("%Y-%m-%d %H:%M SAST")
+    display_filter = edge_results_display_filter(conn)
+    er_display_filter = edge_results_display_filter(conn, "er")
+    clv_edge_match = clv_edge_join_condition(conn)
 
     # ---- Query summary ----
-    summary = q_one(conn, """
+    summary = q_one(conn, f"""
         SELECT COUNT(*) as total,
                SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as hits,
                ROUND(AVG(predicted_ev), 2) as avg_edge,
                SUM(CASE WHEN result='hit' THEN actual_return - 100.0 ELSE -100.0 END) as net_pl
         FROM edge_results WHERE result IN ('hit','miss')
+          {display_filter}
     """)
     total   = int(summary["total"])   if summary else 0
     hits    = int(summary["hits"])    if summary else 0
@@ -7871,11 +7956,17 @@ def render_performance_content(conn) -> str:
     net_pl   = round(float(summary["net_pl"]   or 0), 0) if summary else 0.0
 
     # ---- CLV summary ----
-    clv_summary = q_one(conn, """
+    clv_summary = q_one(conn, f"""
         SELECT ROUND(AVG(clv), 3) as mean_clv,
                ROUND(AVG(CASE WHEN clv > 0 THEN 1.0 ELSE 0 END) * 100, 1) as pct_positive,
                COUNT(*) as n_clv
-        FROM clv_tracking
+        FROM clv_tracking ct
+        WHERE EXISTS (
+            SELECT 1
+            FROM edge_results er
+            WHERE {clv_edge_match}
+              {er_display_filter}
+        )
     """)
     clv_val = float(clv_summary['mean_clv'] or 0) if clv_summary else 0
     clv_pct_positive = float(clv_summary['pct_positive'] or 0) if clv_summary else 0
@@ -7884,9 +7975,10 @@ def render_performance_content(conn) -> str:
     clv_sign = '+' if clv_val > 0 else ''
 
     # ---- Current streak ----
-    recent_rows = q_all(conn, """
+    recent_rows = q_all(conn, f"""
         SELECT result FROM edge_results
         WHERE result IN ('hit','miss')
+          {display_filter}
         ORDER BY settled_at DESC LIMIT 30
     """)
     streak, streak_type = 0, None
@@ -7900,7 +7992,7 @@ def render_performance_content(conn) -> str:
             break
 
     # ---- By Tier ----
-    tier_rows = q_all(conn, """
+    tier_rows = q_all(conn, f"""
         SELECT edge_tier,
                COUNT(*) as cnt,
                SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
@@ -7913,12 +8005,13 @@ def render_performance_content(conn) -> str:
                ROUND(SUM(CASE WHEN result='hit' THEN actual_return - 100.0 ELSE -100.0 END)
                      / (COUNT(*) * 100.0) * 100, 1) as roi_pct
         FROM edge_results WHERE result IN ('hit','miss')
+          {display_filter}
         GROUP BY edge_tier
     """)
     tier_map = {row["edge_tier"]: row for row in tier_rows}
 
     # ---- By Sport ----
-    sport_rows = q_all(conn, """
+    sport_rows = q_all(conn, f"""
         SELECT sport,
                COUNT(*) as cnt,
                SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
@@ -7926,24 +8019,27 @@ def render_performance_content(conn) -> str:
                ROUND(SUM(CASE WHEN result='hit' THEN 1.0 ELSE 0 END)*100.0/COUNT(*),1) as hit_rate,
                ROUND(AVG(predicted_ev),1) as avg_edge
         FROM edge_results WHERE result IN ('hit','miss')
+          {display_filter}
         GROUP BY sport ORDER BY cnt DESC
     """)
 
     # ---- Recent 20 settlements ----
-    recent_settled = q_all(conn, """
+    recent_settled = q_all(conn, f"""
         SELECT match_date, match_key, sport, edge_tier, result,
                ROUND(predicted_ev,1) as ev,
                ROUND(recommended_odds,2) as odds, bookmaker
         FROM edge_results WHERE result IN ('hit','miss')
+          {display_filter}
         ORDER BY settled_at DESC LIMIT 20
     """)
 
     # ---- Chart data: daily stats ----
-    daily_raw = q_all(conn, """
+    daily_raw = q_all(conn, f"""
         SELECT match_date,
                SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as dh,
                COUNT(*) as dt
         FROM edge_results WHERE result IN ('hit','miss')
+          {display_filter}
         GROUP BY match_date ORDER BY match_date ASC
     """)
     daily = {row["match_date"]: (int(row["dh"]), int(row["dt"])) for row in daily_raw}
@@ -8054,14 +8150,15 @@ def render_performance_content(conn) -> str:
         tier_table = '<div class="perf-empty">No tier data yet.</div>'
 
     # ---- CLV by Tier table ----
-    clv_rows = q_all(conn, """
+    clv_rows = q_all(conn, f"""
         SELECT er.edge_tier,
                COUNT(ct.clv) as n_clv,
                ROUND(AVG(ct.clv), 3) as mean_clv,
                ROUND(AVG(CASE WHEN ct.clv > 0 THEN 1.0 ELSE 0 END) * 100, 1) as pct_positive
         FROM clv_tracking ct
-        JOIN edge_results er ON er.match_key = ct.match_key
+        JOIN edge_results er ON {clv_edge_match}
         WHERE er.result IN ('hit','miss')
+          {er_display_filter}
         GROUP BY er.edge_tier
     """)
     if clv_rows:
@@ -8245,7 +8342,7 @@ def render_performance_content(conn) -> str:
     _TIER_BASELINE = {
         "diamond": -20.0, "gold": 33.2, "silver": 12.9, "bronze": 1.6,
     }
-    _th_rows = q_all(conn, """
+    _th_rows = q_all(conn, f"""
         SELECT edge_tier,
                COUNT(*) as cnt,
                SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
@@ -8255,6 +8352,7 @@ def render_performance_content(conn) -> str:
         FROM edge_results
         WHERE result IN ('hit','miss')
           AND settled_at >= datetime('now', '-7 days')
+          {display_filter}
         GROUP BY edge_tier
     """)
     _th_map = {row["edge_tier"]: row for row in _th_rows}
@@ -8491,6 +8589,7 @@ def render_performance_content(conn) -> str:
 def render_unified_health_content(conn, db_status: str) -> str:
     """Unified System Health view — tabbed layout (Overview / Alerts / Sources / System)."""
     # ── Gather all data ───────────────────────────────────────────────────────
+    display_filter = edge_results_display_filter(conn)
     sentry   = _fetch_sentry_data()
     res      = _read_server_resources()
     procs    = _read_process_monitor()
@@ -8512,13 +8611,14 @@ def render_unified_health_content(conn, db_status: str) -> str:
     _brl_orphan_rate = 0.0
     try:
         if conn and table_exists(conn, "edge_results") and table_exists(conn, "bet_recommendations_log"):
-            _r = q_one(conn, """
+            _r = q_one(conn, f"""
                 WITH calibration_edges AS (
                     SELECT edge_id
                     FROM edge_results
                     WHERE datetime(recommended_at) > datetime('now','-1 day')
                       AND datetime(recommended_at) < datetime('now','-1 hour')
                       AND result IS NULL
+                      {display_filter}
                 ),
                 logged_edges AS (
                     SELECT DISTINCT edge_id

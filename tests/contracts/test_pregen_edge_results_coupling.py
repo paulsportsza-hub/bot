@@ -98,7 +98,8 @@ def _make_db(path: str) -> sqlite3.Connection:
             settled_at TEXT,
             confirming_signals INTEGER,
             movement TEXT,
-            match_score TEXT
+            match_score TEXT,
+            is_displayed_in_rollups INTEGER DEFAULT 1
         )
     """)
     conn.commit()
@@ -109,13 +110,25 @@ def _tomorrow_date() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%d")
 
 
-def _seed_edge(conn: sqlite3.Connection, match_key: str, *, settled: bool = False) -> None:
+def _future_date(hours: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%d")
+
+
+def _seed_edge(
+    conn: sqlite3.Connection,
+    match_key: str,
+    *,
+    settled: bool = False,
+    displayed: bool = True,
+    tier: str = "gold",
+) -> None:
     """Insert a single edge_results row."""
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "INSERT INTO edge_results (match_key, result, recommended_at, edge_tier) "
-        "VALUES (?, ?, ?, 'gold')",
-        (match_key, "hit" if settled else None, now),
+        "INSERT INTO edge_results "
+        "(match_key, result, recommended_at, edge_tier, is_displayed_in_rollups) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (match_key, "hit" if settled else None, now, tier, 1 if displayed else 0),
     )
 
 
@@ -198,6 +211,70 @@ class TestEdgeResultsIntersection:
             "Settled edge_results row must not satisfy coupling filter"
         )
 
+    def test_hidden_edges_do_not_count(self, tmp_path):
+        """Hidden edge_results rows must not seed pregen targets."""
+        from pregenerate_narratives import discover_pregen_targets
+
+        db = str(tmp_path / "odds.db")
+        conn = _make_db(db)
+        tomorrow = _tomorrow_date()
+        candidate = f"hidden_a_vs_hidden_b_{tomorrow}"
+        _seed_snapshot(conn, candidate, "epl")
+        _seed_edge(conn, candidate, displayed=False)
+        conn.commit()
+        conn.close()
+
+        targets = discover_pregen_targets(db_path=db)
+        assert candidate not in {t["match_key"] for t in targets}, (
+            "Hidden edge_results row must not satisfy coupling filter"
+        )
+
+    def test_hidden_premium_edge_does_not_extend_horizon(self, tmp_path):
+        """Hidden Diamond/Gold rows must not grant premium-only pregen horizon."""
+        from pregenerate_narratives import discover_pregen_targets
+
+        db = str(tmp_path / "odds.db")
+        conn = _make_db(db)
+        premium_only_date = _future_date(72)
+        candidate = f"premium_hidden_vs_displayed_bronze_{premium_only_date}"
+        _seed_snapshot(conn, candidate, "epl")
+        _seed_edge(conn, candidate, displayed=False, tier="diamond")
+        _seed_edge(conn, candidate, displayed=True, tier="bronze")
+        conn.commit()
+        conn.close()
+
+        targets = discover_pregen_targets(
+            db_path=db,
+            hours_ahead=24,
+            hours_ahead_premium=240,
+        )
+        assert candidate not in {t["match_key"] for t in targets}, (
+            "Hidden premium rows must not extend a displayed non-premium row"
+        )
+
+    def test_settled_premium_edge_does_not_extend_horizon(self, tmp_path):
+        """Settled Diamond/Gold rows must not grant premium-only pregen horizon."""
+        from pregenerate_narratives import discover_pregen_targets
+
+        db = str(tmp_path / "odds.db")
+        conn = _make_db(db)
+        premium_only_date = _future_date(72)
+        candidate = f"premium_settled_vs_displayed_bronze_{premium_only_date}"
+        _seed_snapshot(conn, candidate, "epl")
+        _seed_edge(conn, candidate, settled=True, displayed=True, tier="diamond")
+        _seed_edge(conn, candidate, settled=False, displayed=True, tier="bronze")
+        conn.commit()
+        conn.close()
+
+        targets = discover_pregen_targets(
+            db_path=db,
+            hours_ahead=24,
+            hours_ahead_premium=240,
+        )
+        assert candidate not in {t["match_key"] for t in targets}, (
+            "Settled premium rows must not extend a displayed non-premium row"
+        )
+
 
 # ---------------------------------------------------------------------------
 # AC-3: allowlist escape valve
@@ -259,6 +336,20 @@ class TestLoadUnsettledEdgeMatchKeys:
 
         keys = _load_unsettled_edge_match_keys(db)
         assert keys == {"live_a_vs_live_b_2026-05-01"}
+
+    def test_returns_only_displayed(self, tmp_path):
+        """Helper ignores hidden unsettled rows."""
+        from pregenerate_narratives import _load_unsettled_edge_match_keys
+
+        db = str(tmp_path / "odds.db")
+        conn = _make_db(db)
+        _seed_edge(conn, "shown_a_vs_shown_b_2026-05-01", displayed=True)
+        _seed_edge(conn, "hidden_a_vs_hidden_b_2026-05-01", displayed=False)
+        conn.commit()
+        conn.close()
+
+        keys = _load_unsettled_edge_match_keys(db)
+        assert keys == {"shown_a_vs_shown_b_2026-05-01"}
 
     def test_returns_empty_set_when_table_missing(self, tmp_path):
         """Best-effort: no edge_results table → empty set, no exception."""

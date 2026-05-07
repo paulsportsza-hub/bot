@@ -102,14 +102,59 @@ class EdgeDetailData:
 
 # ── Data Loading ─────────────────────────────────────────────
 
+def _edge_results_display_filter(conn) -> str:
+    try:
+        rows = conn.execute("PRAGMA table_info(edge_results)").fetchall()
+    except Exception:
+        return "AND 0 = 1"
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            name = row.get("name") if isinstance(row, dict) else row["name"]
+        except (IndexError, TypeError, KeyError):
+            try:
+                name = row[1]
+            except Exception:
+                return "AND 0 = 1"
+        except Exception:
+            return "AND 0 = 1"
+        cols.add(str(name))
+    if "is_displayed_in_rollups" not in cols:
+        return ""
+    return "AND COALESCE(is_displayed_in_rollups, 0) = 1"
+
+
+def _normalise_edge_result_bet_type(bet_type: str) -> str:
+    raw = (bet_type or "").strip().lower()
+    if raw in ("home", "home win", "1"):
+        return "home"
+    if raw in ("away", "away win", "2"):
+        return "away"
+    if raw in ("draw", "x"):
+        return "draw"
+    return raw
+
+
+def _edge_result_bet_type_aliases(bet_type: str) -> tuple[str, ...]:
+    outcome = _normalise_edge_result_bet_type(bet_type)
+    if outcome == "home":
+        return ("Home Win", "home", "1")
+    if outcome == "away":
+        return ("Away Win", "away", "2")
+    if outcome == "draw":
+        return ("Draw", "draw", "X", "x")
+    return (bet_type,)
+
+
 def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | None:
     """Read latest unsettled edge_results row for match_key.
 
     Args:
         match_key: Edge results match key.
         bet_type: Optional bet_type filter (e.g. "Home Win", "Away Win").
-            When provided, prefer the row matching this bet_type.
-            Falls back to unfiltered if no match found.
+            When provided, only return the displayed row matching this bet_type.
+            Outcome-specific detail requests must not fall back to another
+            displayed outcome and then reapply stale tip_data.
 
     Uses the scraper connection factory per W81-DBLOCK locked rule.
     """
@@ -125,27 +170,29 @@ def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | Non
         zip([col[0] for col in cursor.description], row)
     )
     try:
-        # BUILD-QA23-FIX: Translate positional keys to DB format
-        _BET_TYPE_MAP = {"home": "Home Win", "away": "Away Win", "draw": "Draw"}
-        if bet_type:
-            bet_type = _BET_TYPE_MAP.get(bet_type, bet_type)
+        _display_filter = _edge_results_display_filter(conn)
         # BUILD-QA22-FIX P0-1b: Filter by bet_type when provided (defence in depth)
         if bet_type:
+            _bet_type_aliases = _edge_result_bet_type_aliases(bet_type)
+            _bet_type_placeholders = ", ".join("?" for _ in _bet_type_aliases)
             row = conn.execute(
                 """
                 SELECT match_key, edge_tier, composite_score, bet_type,
                        recommended_odds, bookmaker, predicted_ev, league,
                        match_date, confirming_signals, sport
                 FROM edge_results
-                WHERE match_key = ? AND bet_type = ? AND result IS NULL
+                WHERE match_key = ? AND bet_type IN ({bet_type_placeholders}) AND result IS NULL
+                  {_display_filter}
                 ORDER BY recommended_at DESC, id DESC
                 LIMIT 1
-                """,
-                (match_key, bet_type),
+                """.format(
+                    bet_type_placeholders=_bet_type_placeholders,
+                    _display_filter=_display_filter,
+                ),
+                (match_key, *_bet_type_aliases),
             ).fetchone()
-            if row:
-                return row
-        # Fallback: unfiltered (original logic)
+            return row
+        # Fallback: latest displayed row for generic match-level lookups.
         row = conn.execute(
             """
             SELECT match_key, edge_tier, composite_score, bet_type,
@@ -153,15 +200,47 @@ def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | Non
                    match_date, confirming_signals, sport
             FROM edge_results
             WHERE match_key = ? AND result IS NULL
+              {_display_filter}
             ORDER BY recommended_at DESC, id DESC
             LIMIT 1
-            """,
+            """.format(_display_filter=_display_filter),
             (match_key,),
         ).fetchone()
         return row
     except Exception as exc:
         log.warning("_load_edge_result failed for %s: %s", match_key, exc)
         return None
+    finally:
+        conn.close()
+
+
+def _edge_result_match_has_unsettled_rows(match_key: str) -> bool:
+    """Return True when current edge_results rows exist for a match.
+
+    This is intentionally not display-filtered: if a current row exists but is
+    hidden, detail rendering should fail closed rather than use stale V1 tip data.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+    except ImportError:
+        return False
+
+    conn = connect_odds_db(DB_PATH)
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM edge_results
+            WHERE match_key = ? AND result IS NULL
+            LIMIT 1
+            """,
+            (match_key,),
+        ).fetchone()
+        return row is not None
+    except Exception as exc:
+        log.warning("_edge_result_match_has_unsettled_rows failed for %s: %s", match_key, exc)
+        return False
     finally:
         conn.close()
 
@@ -215,11 +294,8 @@ def _resolve_outcome(
         ("home"/"away"/"draw", team_display_name_or_Draw)
     """
     bt = (bet_type or outcome_key or "home").strip()
-    if bt in ("Home Win", "home"):
-        raw = "home"
-    elif bt in ("Away Win", "away"):
-        raw = "away"
-    else:
+    raw = _normalise_edge_result_bet_type(bt)
+    if raw not in ("home", "away", "draw"):
         raw = "draw"
     labels = {"home": home, "away": away, "draw": "Draw"}
     return raw, labels.get(raw, bt)
@@ -977,7 +1053,18 @@ def render_edge_detail(
         _bt_hint = tip_data.get("outcome_key") or tip_data.get("bet_type")
     edge_row = _load_edge_result(match_key, bet_type=_bt_hint)
     if not edge_row:
-        if tip_data:
+        _specific_tip_request = bool(
+            tip_data
+            and (
+                _bt_hint
+                or tip_data.get("edge_id")
+                or tip_data.get("recommended_at")
+            )
+        )
+        if tip_data and not (
+            _specific_tip_request
+            and _edge_result_match_has_unsettled_rows(match_key)
+        ):
             ctx = _load_match_context(match_key)
             data = _build_detail_data_from_tip(tip_data, ctx, user_tier)
         else:
