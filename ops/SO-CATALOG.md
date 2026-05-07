@@ -12,8 +12,8 @@
 
 | Metric | Count |
 |---|---|
-| Total SOs in catalog | 34 |
-| ACTIVE | 33 |
+| Total SOs in catalog | 35 |
+| ACTIVE | 34 |
 | CANDIDATE (pending audit landing) | 1 |
 | SUPERSEDED | 0 (history note: SO #44 v1 "Codex 5.5 only executor" superseded by SO #44 Routing v1 binding rule, same number reused) |
 | RETIRED | 0 |
@@ -124,3 +124,25 @@ A canonical Notion mirror of this catalog lives under MzansiEdge Project Wiki �
 | Carve-out | Sub_plans-pattern templates (`sub_plans.html`, `profile_home.html`, `my_matches.html`, `onboarding_*.html`) use a SEPARATE canonical: `.header` itself contains the glow with `overflow: hidden` because their layout is single-zone. Do not cross-pollinate. |
 
 **Standing rule:** any brief touching glow CSS on `match_detail.html` or `edge_detail.html` MUST (a) read `ops/CANONICAL-GLOW-SPEC.md` before editing, (b) run both contract tests after editing AND before committing, (c) include a Codex sub-agent review for any deviation from the locked pattern (visual regressions are user-facing and Paul-approval-required).
+
+
+---
+
+## SO #51 — Daily Maintenance Control Tower (LOCKED 7 May 2026)
+
+| Field | Value |
+|---|---|
+| Status | ACTIVE |
+| Source | [`HANDOFFS/mzansiedge_daily_maintenance_control_tower.md`](../HANDOFFS/mzansiedge_daily_maintenance_control_tower.md) (authoritative) · [`ops/CONTROL-TOWER.md`](CONTROL-TOWER.md) (server-side mirror with schedule table + decommission notes) |
+| Lock date | 7 May 2026 |
+| Authority | Paul direct directive: "the big one is our monitoring system. It needs a rework." Ratified blueprint provided same day; implemented end-to-end (7 Cowork scheduled tasks installed, 3 old Cowork tasks disabled, 2 server-side arbiter crons disabled, ops/CONTROL-TOWER.md + CLAUDE.md pre-read #7 + this SO landed). |
+| Cowork tasks installed | `control-tower-1-system-health-gate` (06:00) · `control-tower-2-bot-runtime-canary` (06:20) · `control-tower-3-edge-quality-audit` (06:45) · `control-tower-4-narrative-verdict-qa` (07:10) · `control-tower-5-social-automation-safety` (07:30) · `control-tower-6-seo-exception-check` (07:50) · `control-tower-7-daily-control-digest` (08:10) |
+| Severity binding | **P0** = Paul notified immediately (product broken / unsafe) · **P1** = Paul sees in digest / immediate if time-sensitive · **P2** = Notion fix brief, NO Paul alert · **P3** = backlog / auto-fix, NO Paul alert |
+| Decommissioned | Cowork: `mzansiedge-daily-health-routine`, `narrative-quality-arbiter`, `health-monitor-fix` · Server cron: `regression_arbiter.py` (09:00 SAST), `arbiter_qa.py` (09:30 SAST) — both comment-marked in crontab, not deleted, restorable if needed |
+| Notion destinations | Pipeline DS `7da2d5d2-0e74-429e-9190-6a54d7bbcd23` (daily Control Tower reports + final digest) · Briefs DB `8aa573c8-f21d-4e97-909b-b11b34892a76` (P0/P1/P2 fix briefs created by tasks) |
+| Telegram destination | `@MzansiEdgeOps` chat_id `-1003877525865` ONLY — and ONLY for P0 (immediate) or AMBER/RED daily digest |
+| Paul's user-facing surface | ONE Notion daily-control page at 08:10 SAST + optional Telegram message ONLY if AMBER/RED with action needed |
+
+**Standing rule:** any new monitoring, alerter, health-check, digest, arbiter, or scheduled-task work MUST (a) read the authoritative spec before designing, (b) classify findings P0-P3, (c) confirm P2/P3 do NOT alert Paul, (d) extend an existing Control Tower task rather than creating a parallel one if the scope overlaps. Adding a new daily-cycle check requires updating the schedule table in `ops/CONTROL-TOWER.md` AND adding a row to this catalog entry's "Cowork tasks installed" line.
+
+**Standing rule (negative):** do NOT re-enable `regression_arbiter.py` or `arbiter_qa.py` server crons. Do NOT re-enable Cowork tasks `mzansiedge-daily-health-routine`, `narrative-quality-arbiter`, or `health-monitor-fix`. If a function is missing, extend the relevant Control Tower task instead.
