@@ -1,101 +1,133 @@
 # Canonical Card Glow Spec
 
-**Locked:** 7 May 2026 | **Brief:** FIX-EDGE-CARD-GLOW-RESTORE-TOP-CENTER-CANONICAL-01
-**Authority:** Paul direct approval after archaeology + diagnosis
+**Locked:** 7 May 2026 (re-locked) | **Brief:** FIX-EDGE-CARD-GLOW-OVERFLOW-RESTORE-01
+**Authority:** Paul direct approval after the second glow regression. Restores the c04650b WORKING pattern.
 
-> ONE pattern only. No carve-outs. No "family" exceptions.
-> Top-center anchor. Per-tier colours. Sub_plans-aligned.
-> DO NOT introduce a second pattern without an explicit Paul-approved brief.
+> ONE pattern. The wrapper is `.upper-section`. The glow flows from header through matchup through meta-bar.
+> DO NOT introduce a `header { overflow: hidden }` containment around the glow — it clips.
+> DO NOT introduce `at 50% 25%` (top-center anchor) on edge cards — that pattern only works in `sub_plans.html` because that file's `.header` is the entire upper region.
+> DO NOT introduce `at 92% 50%` right-side variant — Paul has explicitly rejected it twice.
 
 ---
 
 ## The Canonical Pattern
 
-**Anchor:** `at 50% 25%` (horizontal centre, 25% from top of element)
-**Geometry:** `ellipse 50% 90%` base layer, `ellipse 32% 60%` screen layer
-**Position:** absolute, `inset: -10px 0 auto 0` base, `inset: 0 0 auto 0` screen
-**Heights:** 190px base, 160px screen
-**Filter:** `blur(3px)` base, `mix-blend-mode: screen` screen
+**Wrapper structure:** the glow lives inside a `.upper-section` element that wraps `.header + .matchup + .meta-bar`. The wrapper has `overflow: hidden`. The glow divs are direct children of `.upper-section`, NOT of `.header`.
 
-Alphas (hex suffix on the colour):
+**Anchor:** `at 50% 45%` (horizontal centre, near the vertical middle of `.upper-section` which is ~260px tall).
+**Geometry:** `ellipse 80% 70%` base layer, `ellipse 70% 60%` screen layer.
+**Heights:** 260px base, 220px screen — flows over header into matchup + meta-bar zone.
+**Filter:** `blur(4px)` base, `mix-blend-mode: screen` screen.
 
-| Tier | Colour | Base 0% | Base 45% | Base 70% | Screen 0% | Screen 50% |
+Per-tier alphas (locked, do not modify without new brief):
+
+| Tier | Colour | Base 0% | Base 42% | Base 65% | Screen 0% | Screen 45% |
 |---|---|---|---|---|---|---|
-| Diamond | #B9F2FF | 38 | 18 | 06 | 66 | 22 |
-| Gold | #FFD700 | 38 | 18 | 06 | 66 | 22 |
-| Silver | #CBD5E0 | 38 | 18 | 06 | 66 | 22 |
-| Bronze | #E8A87C | 38 | 18 | 06 | 66 | 22 |
-| Orange (no-edge fallback) | #F7931A | 38 | 18 | 06 | 66 | 22 |
+| Diamond | #B9F2FF | 39 | 16 | 05 | 51 | 1F |
+| Gold | #FFD700 | 39 | 16 | 05 | 51 | 1F |
+| Silver | #CBD5E0 | 2B | 0F | 03 | 42 | 18 |
+| Bronze | #E8A87C | 30 | 13 | 04 | 47 | 1B |
 
-Uniform alphas across tiers — the colour does the visual differentiation, not the opacity.
+Silver and bronze run lower alpha on purpose (contrast tuning).
 
-## HTML Structure (all 4 edge templates)
-
-Insert as **direct children of `.header`**:
-
-```html
-{% set _glow_tier = (TIER_VAR | default("orange", true)) | lower %}
-<div class="logo-glow logo-glow-{{ _glow_tier }}"></div>
-<div class="logo-glow-screen logo-glow-screen-{{ _glow_tier }}"></div>
-```
-
-`TIER_VAR` per template:
-- `edge_detail.html` → `tier`
-- `edge_picks.html` → `top_tier` (already canonical)
-- `edge_summary.html` → `top_tier` (already canonical)
-- `match_detail.html` → `edge_badge_tier`
-
-`.header` requirements:
-- `position: relative;`
-- `isolation: isolate;`
-- `overflow: hidden;`
-
-All other `.header` children must have `position: relative; z-index: 1`.
-
-## CSS Block (paste verbatim)
+## Required CSS structure
 
 ```css
+/* Glow zone wrapper (the magic — overflow:hidden lives HERE, not on .header) */
+.upper-section {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+
+.header {
+    position: relative;
+    z-index: 1;
+    overflow: visible;        /* explicitly visible — glow flows through */
+    /* NO opaque background — the glow must show through */
+}
+
+.matchup {
+    position: relative;
+    z-index: 1;
+}
+
+.meta-bar {
+    position: relative;
+    z-index: 1;
+}
+
 .logo-glow {
     position: absolute;
-    inset: -10px 0 auto 0;
-    height: 190px;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 260px;
     pointer-events: none;
     z-index: 0;
-    filter: blur(3px);
+    filter: blur(4px);
 }
+
 .logo-glow-screen {
     position: absolute;
-    inset: 0 0 auto 0;
-    height: 160px;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 220px;
     pointer-events: none;
     z-index: 0;
     mix-blend-mode: screen;
 }
-.logo-glow-diamond { background: radial-gradient(ellipse 50% 90% at 50% 25%, #B9F2FF38 0%, #B9F2FF18 45%, #B9F2FF06 70%, transparent 100%); }
-.logo-glow-gold    { background: radial-gradient(ellipse 50% 90% at 50% 25%, #FFD70038 0%, #FFD70018 45%, #FFD70006 70%, transparent 100%); }
-.logo-glow-silver  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #CBD5E038 0%, #CBD5E018 45%, #CBD5E006 70%, transparent 100%); }
-.logo-glow-bronze  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #E8A87C38 0%, #E8A87C18 45%, #E8A87C06 70%, transparent 100%); }
-.logo-glow-orange  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%); }
-.logo-glow-screen-diamond { background: radial-gradient(ellipse 32% 60% at 50% 28%, #B9F2FF66 0%, #B9F2FF22 50%, transparent 80%); }
-.logo-glow-screen-gold    { background: radial-gradient(ellipse 32% 60% at 50% 28%, #FFD70066 0%, #FFD70022 50%, transparent 80%); }
-.logo-glow-screen-silver  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #CBD5E066 0%, #CBD5E022 50%, transparent 80%); }
-.logo-glow-screen-bronze  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #E8A87C66 0%, #E8A87C22 50%, transparent 80%); }
-.logo-glow-screen-orange  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #F7931A66 0%, #F7931A22 50%, transparent 80%); }
+
+.logo-glow-diamond { background: radial-gradient(ellipse 80% 70% at 50% 45%, #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%); }
+.logo-glow-screen-diamond { background: radial-gradient(ellipse 70% 60% at 50% 45%, #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%); }
+.logo-glow-gold { background: radial-gradient(ellipse 80% 70% at 50% 45%, #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%); }
+.logo-glow-screen-gold { background: radial-gradient(ellipse 70% 60% at 50% 45%, #FFD70051 0%, #FFD7001F 45%, transparent 80%); }
+.logo-glow-silver { background: radial-gradient(ellipse 80% 70% at 50% 45%, #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%); }
+.logo-glow-screen-silver { background: radial-gradient(ellipse 70% 60% at 50% 45%, #CBD5E042 0%, #CBD5E018 45%, transparent 80%); }
+.logo-glow-bronze { background: radial-gradient(ellipse 80% 70% at 50% 45%, #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%); }
+.logo-glow-screen-bronze { background: radial-gradient(ellipse 70% 60% at 50% 45%, #E8A87C47 0%, #E8A87C1B 45%, transparent 80%); }
 ```
 
-## No variants allowed
+## Required HTML structure
 
-No `.upper-glow-zone`. No `at 92% 50%`. No `at 50% 45%`. No "match-family adaptive" carve-out. Anyone introducing a new variant must update this spec AND get explicit Paul approval AND file a fresh brief.
+```html
+<div class="upper-section">
+    {% if tier %}
+    <div class="logo-glow logo-glow-{{ tier | lower }}"></div>
+    <div class="logo-glow-screen logo-glow-screen-{{ tier | lower }}"></div>
+    {% endif %}
 
-## Regression history (so we don't loop again)
+    <div class="header">
+        <!-- header content -->
+    </div>
 
-- Apr 26: `fc14af4` lifted sub_plans top-center glow into match_detail. Visually correct but had clipping.
-- Apr 28-30: `aec7e2d`, `f9a6fd3` tried to fix clipping by repositioning. Made it worse.
-- 2 May: `e7758fb` deleted the top-center glow and replaced with right-side `at 92% 50%`. Misnamed commit ("CORRECT").
-- 3 May: `eb25301` merged with misleading title ("canonical centre glow") that contradicts the diff.
-- 3 May: `4c610f3 FIX-EDGE-GLOW-CANONICAL-ALIGN-01` propagated right-side variant to edge_detail/picks/summary.
-- 4 May: `e50f730 DOCS-CANONICAL-GLOW-LOCK-01` codified the regression as canonical in this spec doc.
-- 6 May: `FIX-CARD-MATCH-CANONICAL-FAMILY-01` added a match-family carve-out, doubling down.
-- 7 May: Paul caught the regression visually. This spec rewrite restores pattern #1 as canonical.
+    <div class="matchup">
+        <!-- matchup content -->
+    </div>
 
-The pattern: each iterative "fix" assumed the previous step's CSS was the desired baseline. None went back to the original sub_plans canonical that fc14af4 was trying to match. **Future agents: when in doubt, look at sub_plans.html and copy that.**
+    <div class="meta-bar">
+        <!-- meta-bar content -->
+    </div>
+</div>
+```
+
+The tier variable per template:
+- `edge_detail.html` → `tier`
+- `match_detail.html` → `edge_badge_tier`
+- `edge_picks.html` → `top_tier` (uses a separate `.header-glow` shell — kept as-is, that file is fine)
+- `edge_summary.html` → `top_tier` (same as edge_picks — kept as-is)
+
+## Two regression cycles caught
+
+**Cycle 1 (e7758fb 2 May → eb25301 → e50f730 4 May):** right-side `at 92% 50%` variant landed. Codified in spec doc. Paul caught it 7 May.
+
+**Cycle 2 (3e675bf / 80ffd8e 7 May):** my fix moved the glow inside `.header` with `overflow: hidden`. Glow couldn't escape the header, clipped at the bottom of the header strip. Paul caught it the same day.
+
+The pattern that ACTUALLY works (and works for Paul visually) is `c04650b FIX-GLOW-COVERAGE-01` from 4 May:
+- glow lives in a `.upper-section` wrapper
+- wrapper has `overflow: hidden`
+- header has `overflow: visible`
+- glow geometry sized for the wrapper (260px tall, anchored at 45% vertical midpoint)
+
+**For future agents: read this spec, look at c04650b commit, AND check `tests/contracts/test_match_detail_canonical.py`. Do not add `overflow: hidden` to `.header`. Do not move glow divs inside `.header`. Do not change the anchor.**
