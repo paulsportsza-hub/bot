@@ -239,20 +239,33 @@ def _team_mention_count(verdict: str, team: str) -> int:
 
 
 def _is_identity_lead_shape(verdict: str, team: str) -> bool:
-    """Heuristic: identity-lead shape opens with team/identity then ' — '.
+    """Heuristic: identity_price_fact_action shape only.
 
-    The body uses anaphor; close uses team. Total 2× mentions are documented
-    exception to the ≤1× gate. We detect by checking whether the part BEFORE
-    the first em-dash is short and contains the team itself.
+    Engine output for identity_lead is `lead — body. action.` — i.e., the
+    section AFTER the em-dash contains an internal sentence boundary
+    (period followed by space + capital letter), distinguishing it from
+    fact_action / fact_price_action / price_fact_action which all render
+    `body — action.` (single sentence after the em-dash).
+
+    The lead-contains-team check still applies. This dual gate prevents
+    false positives like 'Recent results back Liverpool — Back Liverpool…'
+    (a fact_action under flag=false / pre-fix mode) being exempted.
     """
-    if not verdict or "—" not in verdict:
+    if not verdict or "—" not in verdict or not team:
         return False
-    lead = verdict.split("—", 1)[0].strip()
+    parts = verdict.split("—", 1)
+    if len(parts) < 2:
+        return False
+    lead, after = parts[0].strip(), parts[1].strip()
     if len(lead) > 60:
         return False
-    if not team:
+    if not _mentions(lead, team):
         return False
-    return _mentions(lead, team)
+    # Identity-lead has 2 sentences after em-dash (body. action.). Other
+    # shapes have only 1. Look for an internal period followed by capital.
+    if not re.search(r"\.\s+[A-Z]", after):
+        return False
+    return True
 
 
 def _third_team_mentions(verdict: str, match_id: str) -> list[str]:

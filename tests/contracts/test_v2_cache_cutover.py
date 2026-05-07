@@ -333,7 +333,9 @@ def test_audit_v2_cache_metrics_pass_clean_15_row_slate(tmp_path: Path) -> None:
         )
         for idx in range(15):
             match_id = f"team_{idx}_vs_opponent_{idx}_2026-05-{idx + 10:02d}"
-            verdict = f"Team {idx} price has support — back Team {idx}, standard stake."
+            # FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01: clean fixture is
+            # single-mention (team appears once in close, distinct lead per row).
+            verdict = f"opportunity {idx} still looks playable here — back Team {idx}, standard stake."
             conn.execute(
                 "INSERT INTO narrative_cache VALUES (?, ?, 'v2_microfact', ?, ?, '', '', 0, ?, ?)",
                 (

@@ -1907,18 +1907,24 @@ def _build_outcome_label(
 def _build_recommended_team(
     edge_data: dict, home_name: str, away_name: str
 ) -> str:
-    """Bare team name for team-bets (no ' win' suffix); empty for non-team bets.
+    """Engine-facing team/market label, suffix-stripped for V2 single-mention.
 
-    FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 (Approach D part 1) — keep the
-    user-facing outcome_label intact ('Liverpool win') while feeding the engine
-    a bare team name so verdict copy reads 'Liverpool', not 'Liverpool win'.
+    FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 (Approach D part 1):
+    - home/away outcomes → bare team (no ' win' suffix) so verdict reads
+      'Liverpool', not 'Liverpool win'.
+    - draw / market outcomes → outcome_label so verdict_corpus._first_text
+      always finds a non-empty recommended_team and never falls back to a
+      raw 'Liverpool win' outcome_label on un-migrated specs.
+
+    Defensive _strip_win_suffix on every return path: if a caller passes a
+    pre-suffixed home_name or outcome_label, the engine still sees bare team.
     """
-    outcome = edge_data.get("outcome", "")
+    outcome = (edge_data.get("outcome") or "").strip().lower()
     if outcome == "home":
         return _strip_win_suffix(home_name)
     if outcome == "away":
         return _strip_win_suffix(away_name)
-    return ""
+    return _strip_win_suffix(_build_outcome_label(edge_data, home_name, away_name))
 
 
 def _strip_win_suffix(team: str) -> str:
