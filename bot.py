@@ -301,6 +301,9 @@ _team_edit_state: dict[int, dict] = {}
 # Per-user in-progress settings sports edits
 _settings_sports_state: dict[int, dict] = {}
 
+# Per-user destructive reset confirms; prevents stale double-tap restores.
+_settings_reset_confirm_locks: dict[int, asyncio.Lock] = {}
+
 
 # ── Persistent Reply Keyboard ──────────────────────────────
 # Always-visible bottom keyboard (separate from inline keyboards)
@@ -25256,31 +25259,137 @@ async def handle_settings(query, action: str) -> None:
             message_to_edit=query.message,
         )
     elif action == "reset:confirm":
-        _settings_sports_state.pop(user_id, None)
-        team_state = _team_edit_state.get(user_id)
-        if team_state and team_state.get("source") == "settings":
-            _team_edit_state.pop(user_id, None)
-        await db.reset_user_profile(user_id)
-        _onboarding_state.pop(user_id, None)
-        text = textwrap.dedent("""\
-            <b>✅ Profile reset!</b>
-
-            All preferences have been cleared.
-            Tap below to start fresh.
-        """)
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
-        ])
+        reset_lock = _settings_reset_confirm_locks.setdefault(user_id, asyncio.Lock())
+        if reset_lock.locked():
+            try:
+                await query.answer("Reset already in progress.", show_alert=False)
+            except Exception:
+                pass
+            return
+        await reset_lock.acquire()
         try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await _g_bot.send_message(
-            chat_id=query.from_user.id,
-            text=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb,
-        )
+            source_message = query.message if query.message.chat_id == query.from_user.id else None
+            can_edit_source_photo = source_message is not None and getattr(source_message, "photo", None)
+            prompt_message = source_message or query.message
+            try:
+                await prompt_message.edit_reply_markup(reply_markup=None)
+            except Exception as exc:
+                log.warning("profile reset aborted; reset prompt could not be disabled: %s", exc)
+                return
+
+            first_name = (user.first_name or "") if user else ""
+            reset_data = build_onboarding_restart_data(first_name)
+            reset_snapshot = None
+            if user:
+                reset_snapshot = {
+                    "onboarding_done": user.onboarding_done,
+                    "risk_profile": user.risk_profile,
+                    "notification_hour": user.notification_hour,
+                    "experience_level": user.experience_level,
+                    "education_stage": user.education_stage,
+                    "archetype": user.archetype,
+                    "engagement_score": user.engagement_score,
+                    "bankroll": user.bankroll,
+                    "whatsapp_phone": user.whatsapp_phone,
+                    "preferred_platform": user.preferred_platform,
+                }
+            reset_pref_snapshot = [
+                (pref.sport_key, pref.league, pref.team_name)
+                for pref in await db.get_user_sport_prefs(user_id)
+            ]
+            settings_sports_snapshot = _settings_sports_state.get(user_id)
+            team_edit_snapshot = _team_edit_state.get(user_id)
+            onboarding_snapshot = _onboarding_state.get(user_id)
+
+            async def _restore_reset_snapshot() -> None:
+                async with db.async_session() as s:
+                    if reset_snapshot is not None:
+                        restored_user = await s.get(db.User, user_id)
+                        if restored_user:
+                            for field, value in reset_snapshot.items():
+                                setattr(restored_user, field, value)
+                    await s.execute(
+                        db.delete(db.UserSportPref).where(db.UserSportPref.user_id == user_id)
+                    )
+                    for sport_key, league, team_name in reset_pref_snapshot:
+                        s.add(db.UserSportPref(
+                            user_id=user_id,
+                            sport_key=sport_key,
+                            league=league,
+                            team_name=team_name,
+                        ))
+                    await s.commit()
+                if settings_sports_snapshot is not None:
+                    _settings_sports_state[user_id] = settings_sports_snapshot
+                if team_edit_snapshot is not None:
+                    _team_edit_state[user_id] = team_edit_snapshot
+                if onboarding_snapshot is not None:
+                    _onboarding_state[user_id] = onboarding_snapshot
+
+            try:
+                reset_png = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        render_card_sync,
+                        "profile_reset_confirm.html",
+                        reset_data,
+                        chat_id_hint=query.from_user.id,
+                    ),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                log.warning("profile reset confirmation card pre-render failed; reset aborted: %s", exc)
+                return
+
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
+            ])
+
+            try:
+                _settings_sports_state.pop(user_id, None)
+                team_state = _team_edit_state.get(user_id)
+                if team_state and team_state.get("source") == "settings":
+                    _team_edit_state.pop(user_id, None)
+                await db.reset_user_profile(user_id)
+                _onboarding_state.pop(user_id, None)
+            except Exception as exc:
+                log.warning("profile reset failed before confirmation delivery: %s", exc)
+                try:
+                    await _restore_reset_snapshot()
+                except Exception as restore_exc:
+                    log.warning("profile reset snapshot restore failed: %s", restore_exc)
+                return
+
+            if can_edit_source_photo:
+                try:
+                    await source_message.edit_media(
+                        media=InputMediaPhoto(media=reset_png),
+                        reply_markup=kb,
+                    )
+                    return
+                except Exception as exc:
+                    log.warning("profile reset confirmation edit failed; sending fresh card: %s", exc)
+
+            try:
+                await prompt_message.delete()
+            except Exception as exc:
+                log.warning("profile reset confirmation prompt delete failed; sending fresh card: %s", exc)
+
+            try:
+                await _g_bot.send_photo(
+                    chat_id=query.from_user.id,
+                    photo=reset_png,
+                    reply_markup=kb,
+                )
+            except Exception as exc:
+                log.warning(
+                    "profile reset confirmation card delivery status unknown; reset remains applied: %s",
+                    exc,
+                )
+        finally:
+            if reset_lock.locked():
+                reset_lock.release()
+            if _settings_reset_confirm_locks.get(user_id) is reset_lock:
+                _settings_reset_confirm_locks.pop(user_id, None)
     else:
         await send_card_or_fallback(
             bot=query.get_bot(),

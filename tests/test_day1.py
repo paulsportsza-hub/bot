@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -523,16 +524,248 @@ class TestMenuHandlers:
         await db.save_sport_pref(user_id, "soccer", league="epl")
 
         query = _make_query(user_id=user_id)
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.edit_media = AsyncMock()
+        query.message.photo = [object()]
         mock_gbot = MagicMock()
         mock_gbot.send_message = AsyncMock()
-        with patch("bot._g_bot", mock_gbot):
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+        ):
             await bot.handle_settings(query, "reset:confirm")
+        mock_gbot.send_message.assert_not_called()
+        mock_gbot.send_photo.assert_not_called()
+        query.message.edit_media.assert_awaited_once()
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
 
         user = await db.get_user(user_id)
         assert user.onboarding_done is False
 
         prefs = await db.get_user_sport_prefs(user_id)
         assert len(prefs) == 0
+
+    async def test_handle_settings_reset_confirm_from_non_dm_sends_private_card(self, test_db):
+        user_id = 40012
+        await db.upsert_user(user_id, "reset_group", "ResetGroup")
+        await db.set_onboarding_done(user_id)
+
+        query = _make_query(user_id=user_id)
+        query.message.chat_id = -100123
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.delete = AsyncMock()
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock(return_value=MagicMock())
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.delete.assert_awaited_once()
+        mock_gbot.send_photo.assert_awaited_once()
+        assert mock_gbot.send_photo.call_args.kwargs.get("chat_id") == user_id
+        assert mock_gbot.send_photo.call_args.kwargs.get("photo") == b"png"
+
+    async def test_handle_settings_reset_confirm_edit_media_fail_deletes_prompt_and_sends_card(self, test_db):
+        user_id = 40018
+        await db.upsert_user(user_id, "reset_edit_fallback", "ResetEditFallback")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.edit_media = AsyncMock(side_effect=RuntimeError("edit failed"))
+        query.message.delete = AsyncMock()
+        query.message.photo = [object()]
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock(return_value=MagicMock())
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.edit_media.assert_awaited_once()
+        query.message.delete.assert_awaited_once()
+        mock_gbot.send_photo.assert_awaited_once()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is False
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 0
+
+    async def test_handle_settings_reset_confirm_from_non_dm_disable_fail_aborts_reset(self, test_db):
+        user_id = 40013
+        await db.upsert_user(user_id, "reset_group_fail", "ResetGroupFail")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.chat_id = -100123
+        query.message.edit_reply_markup = AsyncMock(side_effect=RuntimeError("cannot edit"))
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        mock_gbot.send_photo.assert_not_called()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is True
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 1
+
+    async def test_handle_settings_reset_confirm_concurrent_double_tap_serialized(self, test_db):
+        user_id = 40017
+        await db.upsert_user(user_id, "reset_double_tap", "ResetDoubleTap")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query_one = _make_query(user_id=user_id)
+        query_one.message.edit_reply_markup = AsyncMock()
+        query_one.message.edit_media = AsyncMock()
+        query_one.message.photo = [object()]
+        query_two = _make_query(user_id=user_id)
+        query_two.message.edit_reply_markup = AsyncMock()
+        query_two.message.edit_media = AsyncMock()
+        query_two.message.photo = [object()]
+
+        reset_started = asyncio.Event()
+        release_reset = asyncio.Event()
+        reset_calls = 0
+
+        async def slow_reset(_user_id: int) -> None:
+            nonlocal reset_calls
+            reset_calls += 1
+            reset_started.set()
+            await release_reset.wait()
+
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+            patch("bot.db.reset_user_profile", new=slow_reset),
+        ):
+            first = asyncio.create_task(bot.handle_settings(query_one, "reset:confirm"))
+            await asyncio.wait_for(reset_started.wait(), timeout=1.0)
+            await bot.handle_settings(query_two, "reset:confirm")
+            release_reset.set()
+            await first
+
+        assert reset_calls == 1
+        query_two.answer.assert_awaited_once_with("Reset already in progress.", show_alert=False)
+        query_two.message.edit_reply_markup.assert_not_awaited()
+        query_one.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+
+    async def test_handle_settings_reset_confirm_delivery_exception_leaves_reset_applied(self, test_db):
+        user_id = 40014
+        await db.upsert_user(user_id, "reset_delivery_fail", "ResetDeliveryFail")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.chat_id = -100123
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.delete = AsyncMock()
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock(side_effect=RuntimeError("blocked"))
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.delete.assert_awaited_once()
+        mock_gbot.send_photo.assert_awaited_once()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is False
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 0
+
+    async def test_handle_settings_reset_confirm_reset_fail_does_not_deliver_success_card(self, test_db):
+        user_id = 40015
+        await db.upsert_user(user_id, "reset_db_fail", "ResetDbFail")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.edit_media = AsyncMock()
+        query.message.photo = [object()]
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+            patch("bot.db.reset_user_profile", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.edit_media.assert_not_awaited()
+        mock_gbot.send_photo.assert_not_called()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is True
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 1
+
+    async def test_handle_settings_reset_confirm_partial_reset_fail_restores_profile(self, test_db):
+        user_id = 40016
+        await db.upsert_user(user_id, "reset_partial_fail", "ResetPartialFail")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.edit_reply_markup = AsyncMock()
+        query.message.edit_media = AsyncMock()
+        query.message.photo = [object()]
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", return_value=b"png"),
+            patch("bot.db.clear_user_sport_prefs", new_callable=AsyncMock, side_effect=RuntimeError("clear failed")),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.edit_media.assert_not_awaited()
+        mock_gbot.send_photo.assert_not_called()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is True
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 1
+
+    async def test_handle_settings_reset_confirm_render_fail_aborts_reset(self, test_db):
+        user_id = 40011
+        await db.upsert_user(user_id, "reset_render_fail", "ResetFail")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        query.message.edit_reply_markup = AsyncMock()
+        mock_gbot = MagicMock()
+        mock_gbot.send_photo = AsyncMock()
+        with (
+            patch("bot._g_bot", mock_gbot),
+            patch("bot.render_card_sync", side_effect=RuntimeError("render failed")),
+        ):
+            await bot.handle_settings(query, "reset:confirm")
+
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+        mock_gbot.send_photo.assert_not_called()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is True
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 1
 
     async def test_handle_ob_restart(self, test_db):
         bot._onboarding_state.clear()

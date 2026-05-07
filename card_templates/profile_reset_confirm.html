@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
+        .header {
+            position: relative; text-align: center; padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
+        }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #5DD68F30 0%, #F7931A14 48%, #F7931A05 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #5DD68F44 0%, #F7931A18 52%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .title, .header > .subtitle { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #5DD68F, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title {
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 3px; margin-bottom: 5px;
+            display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+        }
+        .title .done {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px;
+            background: #5DD68F; color: #000;
+            border-radius: 50%;
+            font-size: 11px; font-weight: 800; line-height: 1;
+        }
+        .subtitle { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
+
+        .body { padding: 18px 20px 20px; }
+
+        .heading {
+            font-size: 17px; font-weight: 800; color: #FFFFFF;
+            margin-bottom: 6px;
+        }
+        .desc {
+            font-size: 12px; color: var(--text-secondary);
+            margin-bottom: 14px; line-height: 1.55;
+        }
+
+        .done-block {
+            position: relative;
+            background: #0F1A0F;
+            border: 1px solid #2D5A2D;
+            border-left: 3px solid #5DD68F;
+            border-radius: 10px;
+            padding: 11px 14px;
+            margin-bottom: 8px;
+            overflow: hidden; isolation: isolate;
+        }
+        .done-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                #5DD68F22 0%, transparent 70%);
+        }
+        .done-block > * { position: relative; z-index: 1; }
+        .done-label {
+            font-size: 10px; color: #5DD68F;
+            font-weight: 800; letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .done-items {
+            display: flex; flex-direction: column; gap: 5px;
+        }
+        .done-item {
+            font-size: 12px; color: #B0E0B5;
+            display: flex; align-items: center; gap: 7px;
+            line-height: 1.4;
+        }
+        .done-item-mark {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 14px; height: 14px;
+            background: #5DD68F; color: #000;
+            border-radius: 50%;
+            font-size: 9px; font-weight: 800; line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .next-block {
+            position: relative;
+            background: #1A0F00;
+            border: 1px solid #FFBE4540;
+            border-left: 3px solid #FFBE45;
+            border-radius: 10px;
+            padding: 10px 14px;
+            overflow: hidden; isolation: isolate;
+        }
+        .next-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                #FFBE4520 0%, transparent 70%);
+        }
+        .next-block > * { position: relative; z-index: 1; }
+        .next-label {
+            font-size: 10px; color: #FFBE45;
+            font-weight: 800; letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .next-text {
+            font-size: 12px; color: #FFD89F;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">
+            <span>PROFILE RESET</span>
+            <span class="done">OK</span>
+        </div>
+        <div class="subtitle">Your profile is ready for a fresh setup</div>
+    </div>
+
+    <div class="body">
+        {% if first_name %}
+        <div class="heading">Profile reset, {{ first_name | e }}.</div>
+        {% else %}
+        <div class="heading">Profile reset.</div>
+        {% endif %}
+        <div class="desc">
+            Your profile settings have been cleared. Start onboarding again to rebuild your sports, teams, risk profile, and bankroll.
+        </div>
+
+        <div class="done-block">
+            <div class="done-glow"></div>
+            <div class="done-label">Cleared just now</div>
+            <div class="done-items">
+                <div class="done-item"><span class="done-item-mark">&#10003;</span><span>Sports, teams, risk, and bankroll</span></div>
+                <div class="done-item"><span class="done-item-mark">&#10003;</span><span>Saved onboarding state and setup progress</span></div>
+            </div>
+        </div>
+
+        <div class="next-block">
+            <div class="next-glow"></div>
+            <div class="next-label">Next step</div>
+            <div class="next-text">Tap Start onboarding below to set up your profile from scratch.</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -41,6 +41,7 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
         ai_breakdown.html
         sub_payment_confirmed.html
         profile_home.html
+        profile_reset_confirm.html
         match_detail.html
         guide_topic.html
     Rationale: list-like content varies in item count — dynamic height eliminates

@@ -308,6 +308,7 @@ def make_sample_data():
         ),
         "onboarding_notify.html":            cda.build_onboarding_notify_data(current_hour=8),
         "onboarding_restart.html":           cda.build_onboarding_restart_data(first_name="Paul"),
+        "profile_reset_confirm.html":        cda.build_onboarding_restart_data(first_name="Paul"),
         "onboarding_risk.html":              cda.build_onboarding_risk_data(),
         "onboarding_sports.html":            cda.build_onboarding_sports_data(
             selected_sports=["soccer"]),

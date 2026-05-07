@@ -82,6 +82,7 @@ LIST_TEMPLATES = {
     "story_quiz_step.html",
     "story_quiz_complete.html",
     "onboarding_restart.html",
+    "profile_reset_confirm.html",
     # BUILD-PROFILE-CARD-01
     "profile_home.html",
     # BUILD-MY-TEAMS-CARD-01
