@@ -25,25 +25,65 @@
             box-shadow: none;
         }
 
-        /* ── Upper glow zone (CANONICAL — wraps header + matchup + meta-bar) ── */
-        .upper-glow-zone {
-            position: relative;
-            isolation: isolate;
-            overflow: hidden;
-        }
-        .upper-glow {
+        /* ── Logo glow (CANONICAL pattern #1: top-center, sub_plans-aligned, tier-coloured) ── */
+        /* See ops/CANONICAL-GLOW-SPEC.md for full spec + tuning history. */
+        .logo-glow {
             position: absolute;
-            inset: -20px -10px;
+            inset: -10px 0 auto 0;
+            height: 190px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(2px);
+            filter: blur(3px);
         }
-        .upper-glow-screen {
+        .logo-glow-screen {
             position: absolute;
-            inset: 0;
+            inset: 0 0 auto 0;
+            height: 160px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
+        }
+        /* Per-tier base layer (50% 25% anchor, blur 3px) */
+        .logo-glow-diamond {
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #B9F2FF38 0%, #B9F2FF18 45%, #B9F2FF06 70%, transparent 100%);
+        }
+        .logo-glow-gold {
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #FFD70038 0%, #FFD70018 45%, #FFD70006 70%, transparent 100%);
+        }
+        .logo-glow-silver {
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #CBD5E038 0%, #CBD5E018 45%, #CBD5E006 70%, transparent 100%);
+        }
+        .logo-glow-bronze {
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #E8A87C38 0%, #E8A87C18 45%, #E8A87C06 70%, transparent 100%);
+        }
+        .logo-glow-orange {
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        /* Per-tier screen layer (50% 28% anchor, mix-blend-mode: screen) */
+        .logo-glow-screen-diamond {
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #B9F2FF66 0%, #B9F2FF22 50%, transparent 80%);
+        }
+        .logo-glow-screen-gold {
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #FFD70066 0%, #FFD70022 50%, transparent 80%);
+        }
+        .logo-glow-screen-silver {
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #CBD5E066 0%, #CBD5E022 50%, transparent 80%);
+        }
+        .logo-glow-screen-bronze {
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #E8A87C66 0%, #E8A87C22 50%, transparent 80%);
+        }
+        .logo-glow-screen-orange {
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
         }
 
         /* ── 1. Header (CANONICAL — transparent, no border-bottom) ── */
@@ -55,6 +95,8 @@
             align-items: center;
             justify-content: space-between;
             gap: 10px;
+            isolation: isolate;
+            overflow: hidden;
         }
         .logo-img {
             height: 26px;
@@ -389,22 +431,13 @@
 <body>
 <div class="card">
 
-    {# Conditional glow color: tier-color if has edge, brand-orange otherwise #}
-    {% set _tier_glow = {"diamond": "#B9F2FF", "gold": "#FFD700", "silver": "#CBD5E0", "bronze": "#E8A87C"} %}
-    {% set _tier = (edge_badge_tier | default("", true)) | lower %}
-    {% set _glow = edge_badge_color | default("", true) or _tier_glow.get(_tier, "#F7931A") %}
+    {# Glow class resolution — tier-coloured if has edge, brand-orange otherwise #}
+    {% set _glow_tier = (edge_badge_tier | default("orange", true)) | lower %}
 
-    <!-- ── Upper glow zone (header + matchup + meta-bar as unified block) ── -->
-    <div class="upper-glow-zone">
-        <div class="upper-glow" style="
-            background: radial-gradient(ellipse 35% 130% at 92% 50%, {{ _glow }}10 0%, {{ _glow }}07 50%, transparent 90%);
-        "></div>
-        <div class="upper-glow-screen" style="
-            background: radial-gradient(ellipse 22% 100% at 92% 50%, {{ _glow }}1A 0%, {{ _glow }}0D 40%, transparent 80%);
-        "></div>
-
-        <!-- ── 1. Header ──────────────────────────────────────── -->
-        <div class="header">
+    <!-- ── 1. Header (with top-center glow as direct children, CANONICAL pattern #1) ── -->
+    <div class="header">
+        <div class="logo-glow logo-glow-{{ _glow_tier }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ _glow_tier }}"></div>
             {% if header_logo_b64 %}
             <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
             {% else %}
@@ -467,7 +500,6 @@
         {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: SS icon+DStv badge or text fallback -#}
         {% if channel %}{% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
         </div>
-    </div><!-- /.upper-glow-zone -->
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->
     <div class="market-section">

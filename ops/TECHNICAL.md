@@ -156,17 +156,6 @@ Bronze users see WHAT they could win but not HOW. 4 access levels: full, partial
 
 794+ tests (719 contract + 59 snapshot + 16 edge accuracy, as of 4 Apr). 5-layer testing schema in `testing/TESTING-SCHEMA.md`. Launch gate: zero L2/L3 failures for 7 consecutive days.
 
-## Canonical Card Glow (LOCKED)
+## Canonical Card Glow
 
-All glow effects on card templates (`match_detail.html`, `edge_detail.html`, `edge_picks.html`, `edge_summary.html`) use the **eb25301 canonical spec** — a two-layer radial gradient (base + screen-blend) with per-tier CSS classes and Paul-approved alpha values from 12-step iterative tuning.
-
-**Full spec:** `/home/paulsportsza/bot/ops/CANONICAL-GLOW-SPEC.md`
-
-**Critical rules:**
-- Gradient centre is `at 50% 45%` — do not move it
-- Per-tier classes (`logo-glow-{diamond|gold|silver|bronze}`) — never collapse to a single `{{ tier_color }}` CSS variable
-- Alpha values are locked — do not change without explicit Paul approval via new brief
-- Glow divs are direct children of `.header`, not inside sub-containers
-- `.header` must have `overflow: hidden`; all other children `z-index: 1`
-
-Any brief touching card template CSS MUST read `CANONICAL-GLOW-SPEC.md` before making changes.
+See [`ops/CANONICAL-GLOW-SPEC.md`](CANONICAL-GLOW-SPEC.md). Locked pattern: top-center `at 50% 25%`, per-tier colours, sub_plans-aligned. Do not introduce variants without Paul approval + new brief.

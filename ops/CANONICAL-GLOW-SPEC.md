@@ -1,149 +1,101 @@
 # Canonical Card Glow Spec
 
-**Locked:** 4 May 2026 | **Commits:** eb25301 (match_detail) · 4c610f3 (edge templates)
-**Amended:** 6 May 2026 | **Brief:** FIX-CARD-MATCH-CANONICAL-FAMILY-01 (match-family exception)
-**Authority:** Paul direct approval after 12-step iterative tuning
+**Locked:** 7 May 2026 | **Brief:** FIX-EDGE-CARD-GLOW-RESTORE-TOP-CENTER-CANONICAL-01
+**Authority:** Paul direct approval after archaeology + diagnosis
 
-> DO NOT modify alpha values, ellipse dimensions, or gradient centre without a new brief explicitly approved by Paul.
-> DO NOT use a single `{{ tier_color }}` variable in CSS. Use per-tier CSS classes (see below).
-> Agents reading card templates MUST read this file before making any changes to glow-related CSS.
-> Exception: `match_detail.html` now uses the adaptive match-family upper glow documented below.
+> ONE pattern only. No carve-outs. No "family" exceptions.
+> Top-center anchor. Per-tier colours. Sub_plans-aligned.
+> DO NOT introduce a second pattern without an explicit Paul-approved brief.
 
 ---
 
-## HTML Structure
+## The Canonical Pattern
 
-Insert as **direct children of `.header`** (NOT inside any sub-container):
+**Anchor:** `at 50% 25%` (horizontal centre, 25% from top of element)
+**Geometry:** `ellipse 50% 90%` base layer, `ellipse 32% 60%` screen layer
+**Position:** absolute, `inset: -10px 0 auto 0` base, `inset: 0 0 auto 0` screen
+**Heights:** 190px base, 160px screen
+**Filter:** `blur(3px)` base, `mix-blend-mode: screen` screen
+
+Alphas (hex suffix on the colour):
+
+| Tier | Colour | Base 0% | Base 45% | Base 70% | Screen 0% | Screen 50% |
+|---|---|---|---|---|---|---|
+| Diamond | #B9F2FF | 38 | 18 | 06 | 66 | 22 |
+| Gold | #FFD700 | 38 | 18 | 06 | 66 | 22 |
+| Silver | #CBD5E0 | 38 | 18 | 06 | 66 | 22 |
+| Bronze | #E8A87C | 38 | 18 | 06 | 66 | 22 |
+| Orange (no-edge fallback) | #F7931A | 38 | 18 | 06 | 66 | 22 |
+
+Uniform alphas across tiers — the colour does the visual differentiation, not the opacity.
+
+## HTML Structure (all 4 edge templates)
+
+Insert as **direct children of `.header`**:
 
 ```html
-{% if TIER_VAR %}
-<div class="logo-glow logo-glow-{{ TIER_VAR }}"></div>
-<div class="logo-glow-screen logo-glow-screen-{{ TIER_VAR }}"></div>
-{% endif %}
+{% set _glow_tier = (TIER_VAR | default("orange", true)) | lower %}
+<div class="logo-glow logo-glow-{{ _glow_tier }}"></div>
+<div class="logo-glow-screen logo-glow-screen-{{ _glow_tier }}"></div>
 ```
 
-Where `TIER_VAR` is the lowercase tier string for that template:
+`TIER_VAR` per template:
 - `edge_detail.html` → `tier`
-- `edge_picks.html` → `top_tier`
-- `edge_summary.html` → `top_tier`
+- `edge_picks.html` → `top_tier` (already canonical)
+- `edge_summary.html` → `top_tier` (already canonical)
+- `match_detail.html` → `edge_badge_tier`
 
-`match_detail.html` is no longer part of this header-contained logo glow shell.
-It uses the match-family upper glow zone below.
+`.header` requirements:
+- `position: relative;`
+- `isolation: isolate;`
+- `overflow: hidden;`
 
-All other `.header` children MUST have `position: relative; z-index: 1` so they render above the glow.
-`.header` itself MUST have `overflow: hidden`.
+All other `.header` children must have `position: relative; z-index: 1`.
 
-> IMPORTANT: The tier variable MUST be lowercased when used in the class name.
-> Use `{{ TIER_VAR | lower }}` — never `{{ TIER_VAR }}` bare.
-> CSS classes are lowercase (logo-glow-gold) — title-case renders will silently produce no glow.
-
----
-
-## Match-Family Upper Glow
-
-`FIX-CARD-MATCH-CANONICAL-FAMILY-01` approved `match_detail.html` to use the
-adaptive match-family upper glow instead of the header-contained `.logo-glow`
-shell.
-
-- Structure: `.upper-glow-zone` is a direct `.card` child and wraps the header,
-  matchup, and meta bar.
-- Colour: resolve `edge_badge_color` first; otherwise map lowercase
-  `edge_badge_tier` to the canonical tier colour; otherwise fall back to
-  brand orange `#F7931A`.
-- Geometry and alpha are locked for this shell:
-  - `.upper-glow`: `ellipse 35% 130% at 92% 50%`, alpha stops `10` and `07`
-  - `.upper-glow-screen`: `ellipse 22% 100% at 92% 50%`, alpha stops `1A` and `0D`
-
----
-
-## Base Layer CSS
+## CSS Block (paste verbatim)
 
 ```css
 .logo-glow {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 260px;
+    inset: -10px 0 auto 0;
+    height: 190px;
     pointer-events: none;
     z-index: 0;
-    filter: blur(4px);
+    filter: blur(3px);
 }
-```
-
-## Screen Blend Layer CSS
-
-```css
 .logo-glow-screen {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 220px;
+    inset: 0 0 auto 0;
+    height: 160px;
     pointer-events: none;
     z-index: 0;
     mix-blend-mode: screen;
 }
+.logo-glow-diamond { background: radial-gradient(ellipse 50% 90% at 50% 25%, #B9F2FF38 0%, #B9F2FF18 45%, #B9F2FF06 70%, transparent 100%); }
+.logo-glow-gold    { background: radial-gradient(ellipse 50% 90% at 50% 25%, #FFD70038 0%, #FFD70018 45%, #FFD70006 70%, transparent 100%); }
+.logo-glow-silver  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #CBD5E038 0%, #CBD5E018 45%, #CBD5E006 70%, transparent 100%); }
+.logo-glow-bronze  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #E8A87C38 0%, #E8A87C18 45%, #E8A87C06 70%, transparent 100%); }
+.logo-glow-orange  { background: radial-gradient(ellipse 50% 90% at 50% 25%, #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%); }
+.logo-glow-screen-diamond { background: radial-gradient(ellipse 32% 60% at 50% 28%, #B9F2FF66 0%, #B9F2FF22 50%, transparent 80%); }
+.logo-glow-screen-gold    { background: radial-gradient(ellipse 32% 60% at 50% 28%, #FFD70066 0%, #FFD70022 50%, transparent 80%); }
+.logo-glow-screen-silver  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #CBD5E066 0%, #CBD5E022 50%, transparent 80%); }
+.logo-glow-screen-bronze  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #E8A87C66 0%, #E8A87C22 50%, transparent 80%); }
+.logo-glow-screen-orange  { background: radial-gradient(ellipse 32% 60% at 50% 28%, #F7931A66 0%, #F7931A22 50%, transparent 80%); }
 ```
 
----
+## No variants allowed
 
-## Per-Tier Gradients (LOCKED — do not change alphas)
+No `.upper-glow-zone`. No `at 92% 50%`. No `at 50% 45%`. No "match-family adaptive" carve-out. Anyone introducing a new variant must update this spec AND get explicit Paul approval AND file a fresh brief.
 
-```css
-.logo-glow-diamond {
-    background: radial-gradient(ellipse 80% 70% at 50% 45%,
-        #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
-}
-.logo-glow-screen-diamond {
-    background: radial-gradient(ellipse 70% 60% at 50% 45%,
-        #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
-}
-.logo-glow-gold {
-    background: radial-gradient(ellipse 80% 70% at 50% 45%,
-        #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
-}
-.logo-glow-screen-gold {
-    background: radial-gradient(ellipse 70% 60% at 50% 45%,
-        #FFD70051 0%, #FFD7001F 45%, transparent 80%);
-}
-.logo-glow-silver {
-    background: radial-gradient(ellipse 80% 70% at 50% 45%,
-        #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
-}
-.logo-glow-screen-silver {
-    background: radial-gradient(ellipse 70% 60% at 50% 45%,
-        #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
-}
-.logo-glow-bronze {
-    background: radial-gradient(ellipse 80% 70% at 50% 45%,
-        #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
-}
-.logo-glow-screen-bronze {
-    background: radial-gradient(ellipse 70% 60% at 50% 45%,
-        #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
-}
-```
+## Regression history (so we don't loop again)
 
----
+- Apr 26: `fc14af4` lifted sub_plans top-center glow into match_detail. Visually correct but had clipping.
+- Apr 28-30: `aec7e2d`, `f9a6fd3` tried to fix clipping by repositioning. Made it worse.
+- 2 May: `e7758fb` deleted the top-center glow and replaced with right-side `at 92% 50%`. Misnamed commit ("CORRECT").
+- 3 May: `eb25301` merged with misleading title ("canonical centre glow") that contradicts the diff.
+- 3 May: `4c610f3 FIX-EDGE-GLOW-CANONICAL-ALIGN-01` propagated right-side variant to edge_detail/picks/summary.
+- 4 May: `e50f730 DOCS-CANONICAL-GLOW-LOCK-01` codified the regression as canonical in this spec doc.
+- 6 May: `FIX-CARD-MATCH-CANONICAL-FAMILY-01` added a match-family carve-out, doubling down.
+- 7 May: Paul caught the regression visually. This spec rewrite restores pattern #1 as canonical.
 
-## Alpha Reference Table
-
-| Tier    | Colour    | Base peak | Base mid | Base fade | Screen peak | Screen mid |
-|---------|-----------|-----------|----------|-----------|-------------|------------|
-| Diamond | #B9F2FF   | `39`      | `16`     | `05`      | `51`        | `1F`       |
-| Gold    | #FFD700   | `39`      | `16`     | `05`      | `51`        | `1F`       |
-| Silver  | #CBD5E0   | `2B`      | `0F`     | `03`      | `42`        | `18`       |
-| Bronze  | #E8A87C   | `30`      | `13`     | `04`      | `47`        | `1B`       |
-
----
-
-## Tuning History (summary)
-
-12 iterative steps, 4 May 2026, Paul direct feedback. Key decisions:
-- Centre point `at 50% 45%` — VS midpoint horizontally centred
-- Two opacity reductions: −30% then −15% from initial values
-- Single-source gradient (no dual or corner variants)
-- Per-tier classes (not a single `{{ tier_color }}` CSS variable) to allow tier-specific alpha calibration
-
-Full tuning log: Notion report `354d9048-d73c-819e-8700-c6fc2bda2566`
+The pattern: each iterative "fix" assumed the previous step's CSS was the desired baseline. None went back to the original sub_plans canonical that fc14af4 was trying to match. **Future agents: when in doubt, look at sub_plans.html and copy that.**
