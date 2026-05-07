@@ -163,8 +163,15 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     # non-sudo invocation only sees user-session logs and misses the system
     # service entirely. --since pinned to RESTART_TS so a stale Startup Truth
     # from the previous run cannot match (Codex P1).
-    if sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null \
-            | grep -q 'Startup Truth'; then
+    # Use `grep -c` (consumes all input) rather than `grep -q` because
+    # `grep -q` exits early on first match, which combined with `set -o
+    # pipefail` (set above) makes the pipeline return non-zero (SIGPIPE
+    # on journalctl) and the `if` test evaluates to false even after a
+    # real match. Burnt twice in this brief's iteration. Logging the
+    # match count helps the next operator debug a failed wait.
+    journal_st=$(sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    log "wait state=$state startup_truth=$journal_st"
+    if [ "$journal_st" -gt 0 ]; then
         WAIT_RC=0
         break
     fi

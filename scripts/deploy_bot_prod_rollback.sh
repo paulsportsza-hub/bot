@@ -57,8 +57,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         WAIT_RC=2
         break
     fi
-    if sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null \
-            | grep -q 'Startup Truth'; then
+    # Use `grep -c` (consumes all input) rather than `grep -q` because
+    # `grep -q` exits early on first match, which combined with `set -o
+    # pipefail` makes the pipeline return non-zero (SIGPIPE on journalctl)
+    # and the `if` test evaluates to false even after a real match.
+    journal_st=$(sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    if [ "$journal_st" -gt 0 ]; then
         WAIT_RC=0
         break
     fi
