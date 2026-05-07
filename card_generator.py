@@ -735,7 +735,13 @@ def compute_digest_stats() -> dict:
         return {}
 
     try:
-        conn = _sqlite3.connect(str(db_path), timeout=5.0)
+        # FIX-DBLOCK-CARD-GEN-DIGEST-STATS-01: was bare sqlite3.connect with no
+        # WAL pragma + 5s timeout — caused 'database is locked' on every card
+        # render under load. Use connect_odds_db_readonly (URI mode=ro,
+        # 60s busy_timeout, query_only=ON) so digest stats can read while
+        # writers hold WAL transactions.
+        from scrapers.db_connect import connect_odds_db_readonly as _connect_ro
+        conn = _connect_ro(str(db_path), timeout=2.0)
         conn.row_factory = _sqlite3.Row
 
         # LAST 10 settled
