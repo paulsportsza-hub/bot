@@ -6557,18 +6557,26 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         # BUILD-W3 / W3-FIX: send My Matches image card (falls back to text on render failure)
         try:
             _raw_games_wm = _schedule_cache.get(user_id, [])
-            _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
-            _mm_input_wm = await _build_mm_matches_for_card_with_odds(_raw_games_wm, _edge_info_wm)
-            # W3-FIX: sort to align with card [N] order
-            _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
-            _mm_games_snapshot[user_id] = _mm_sorted_wm
-            _wm_card_data = build_my_matches_data(_mm_input_wm, page=1)
-            _wm_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_wm if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
+            if not _raw_games_wm:
+                _mm_games_snapshot[user_id] = []
+                _wm_template = "my_matches_empty.html"
+                _wm_card_data = build_my_matches_empty_data()
+                _wm_markup = markup
+            else:
+                _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
+                _mm_input_wm = await _build_mm_matches_for_card_with_odds(_raw_games_wm, _edge_info_wm)
+                # W3-FIX: sort to align with card [N] order
+                _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
+                _mm_games_snapshot[user_id] = _mm_sorted_wm
+                _wm_card_data = build_my_matches_data(_mm_input_wm, page=1)
+                _wm_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_wm if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
+                _wm_template = "my_matches.html"
+                _wm_markup = _build_mm_card_markup(_mm_sorted_wm, page=0, sport_keys=_wm_sk)
             await asyncio.wait_for(
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
-                    template="my_matches.html", data=_wm_card_data,
-                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_wm, page=0, sport_keys=_wm_sk),
+                    template=_wm_template, data=_wm_card_data,
+                    text_fallback=text, markup=_wm_markup,
                 ),
                 timeout=12.0,
             )
@@ -6697,25 +6705,33 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 pass  # Spinner has in-flight API call; proceed with delivery
         # BUILD-W3 / W3-FIX: store sorted snapshot + build card data
         _raw_games_cp = _schedule_cache.get(user_id, [])
-        _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
-        _mm_input_cp = await _build_mm_matches_for_card_with_odds(_raw_games_cp, _edge_info_cp)
-        # W3-FIX: sort to align with card [N] order
-        _mm_sorted_cp = _sort_mm_snapshot(_mm_input_cp)
-        _mm_games_snapshot[user_id] = _mm_sorted_cp
-        _cp_card_data = build_my_matches_data(_mm_input_cp, page=1)
+        if not _raw_games_cp:
+            _mm_games_snapshot[user_id] = []
+            _cp_template = "my_matches_empty.html"
+            _cp_card_data = build_my_matches_empty_data()
+            _cp_markup = markup
+        else:
+            _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
+            _mm_input_cp = await _build_mm_matches_for_card_with_odds(_raw_games_cp, _edge_info_cp)
+            # W3-FIX: sort to align with card [N] order
+            _mm_sorted_cp = _sort_mm_snapshot(_mm_input_cp)
+            _mm_games_snapshot[user_id] = _mm_sorted_cp
+            _cp_card_data = build_my_matches_data(_mm_input_cp, page=1)
+            _cp_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_cp if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
+            _cp_template = "my_matches.html"
+            _cp_markup = _build_mm_card_markup(_mm_sorted_cp, page=0, sport_keys=_cp_sk)
         # Delete spinner, send card (falls back to text on render failure)
         if loading is not None:
             try:
                 await loading.delete()
             except Exception:
                 pass
-        _cp_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_cp if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
         try:
             await asyncio.wait_for(
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
-                    template="my_matches.html", data=_cp_card_data,
-                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_cp, page=0, sport_keys=_cp_sk),
+                    template=_cp_template, data=_cp_card_data,
+                    text_fallback=text, markup=_cp_markup,
                 ),
                 timeout=12.0,
             )
