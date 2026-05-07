@@ -23745,12 +23745,25 @@ def _select_best_bookmaker_for_outcome(
         prices_by_key[bk_key] = (bk, price_val)
         if price_val > best_price:
             best_bk, best_price = bk, price_val
+    # FIX-CTA-PIN-TO-VERDICT-BOOKMAKER-01: when a verdict-bound bookmaker is
+    # specified, ALWAYS return it. The verdict is bound to recommended_bookmaker;
+    # the CTA must follow it so the user clicks through to the bookmaker whose
+    # price the verdict was computed against. Live max-price chasing is wrong
+    # here — the comparison row already exposes all available prices for shoppers.
+    #
+    # Three pin scenarios:
+    #   1. preferred has a live price → return (preferred_bk, preferred_price)
+    #   2. preferred has no live price but other bookmakers do → return
+    #      (preferred_bookmaker, None) so callers know to use the bookmaker
+    #      base URL or stored deeplink rather than picking a different bk
+    #   3. no preferred specified → fall back to highest-price selection
+    if preferred_key:
+        if preferred_key in prices_by_key:
+            preferred_bk, preferred_price = prices_by_key[preferred_key]
+            return (preferred_bk, preferred_price)
+        return (preferred_bookmaker, None)
     if best_bk is None:
         return (None, None)
-    if preferred_key and preferred_key in prices_by_key:
-        preferred_bk, preferred_price = prices_by_key[preferred_key]
-        if abs(preferred_price - best_price) < 1e-9:
-            return (preferred_bk, preferred_price)
     return (best_bk, best_price)
 
 
