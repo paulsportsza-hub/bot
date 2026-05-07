@@ -344,17 +344,18 @@ _CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
 # (corpus or mapper) hits a CRITICAL/MAJOR validation failure here.
 _DIAMOND_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
-    r"go\s+big|hard\s+to\s+look\s+past"
+    r"go\s+big|hard\s+to\s+look\s+past|is\s+the\s+play\b.*full\s+stake"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
+_GOLD_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(r"(?:^|\s)is\s+the\s+play\b.*standard\s+stake\b.*[\.!]?\s*$", re.IGNORECASE)
 _SILVER_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
-    r"(?:^|\s)lean\b.*[\.!]?\s*$",
+    r"(?:^|\s)(?:(?<!small\s)lean|gets\s+the\s+nod)\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
 _BRONZE_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
-    r"worth\s+a|small\s+play"
+    r"worth\s+a|small\s+play|small\s+lean\s+to"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
@@ -393,6 +394,8 @@ def imperative_close_ok(text: str, tier: str) -> bool:
     if tier_lower == "diamond":
         if _DIAMOND_SIGNAL_MAPPER_CLOSE_RE.search(text):
             return True
+    elif tier_lower == "gold" and _GOLD_SIGNAL_MAPPER_CLOSE_RE.search(text):
+        return True
     elif tier_lower == "silver":
         if _SILVER_SIGNAL_MAPPER_CLOSE_RE.search(text):
             return True

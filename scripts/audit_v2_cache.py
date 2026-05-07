@@ -34,6 +34,11 @@ METRIC_LABELS = (
     "duplicate verdict count",
     "distinct primary clause count",
     "banned term count",
+    "gets_the_nod_count",
+    "lean_count",
+    "is_the_play_count",
+    "small_lean_to_count",
+    "signal_register_count",
 )
 
 SPORT_VOCAB_BANS = {
@@ -49,6 +54,51 @@ FALLBACK_PATTERNS = (
     "edge confirmed",
     "this pick support",
 )
+
+SIGNAL_REGISTER_TERMS = (
+    "form",
+    "recent results",
+    "books give",
+    "set-piece",
+    "powerplay",
+    "breakdown",
+    "lineout",
+    "lineup",
+    "injury",
+    "absence",
+    "missing",
+    "movement",
+    "line move",
+    "market move",
+    "venue",
+    "old trafford",
+    "etihad",
+    # `home` is checked only against verdict_html, not generic bet-type labels.
+    "home",
+    "home advantage",
+    "home setting",
+    "stadium",
+    "matchup",
+    "head-to-head",
+    "h2h",
+    "streak",
+    "pace",
+    "press",
+    "scrum",
+    "maul",
+    "attack",
+    "defence",
+    "defense",
+    "batting",
+    "bowling",
+    "spin",
+    "pitch",
+    "wicket",
+    "death overs",
+    "new ball",
+)
+
+MIN_SIGNAL_REGISTER_RATIO = 0.30
 FALLBACK_SHELL_RE = re.compile(
     r"^[^—]*(?:\bat\s+\d+(?:\.\d+)?\b|\bwith\s+[a-z])[^—]*"
     r"—\s*(?:back|lean|small lean to)\s+[^.]+,\s*"
@@ -368,6 +418,11 @@ def audit_database(db_path: str) -> dict[str, int]:
     fallback_count = 0
     wrong_team_count = 0
     banned_count = 0
+    gets_the_nod_count = 0
+    lean_count = 0
+    is_the_play_count = 0
+    small_lean_to_count = 0
+    signal_register_count = 0
     verdict_to_matches: dict[str, set[str]] = defaultdict(set)
     primary_clauses: list[str] = []
     conn = connect_odds_db(db_path)
@@ -378,6 +433,16 @@ def audit_database(db_path: str) -> dict[str, int]:
         for row in rows:
             verdict = row.verdict_html.strip()
             lower = verdict.lower()
+            if "gets the nod" in lower:
+                gets_the_nod_count += 1
+            if "lean " in lower:
+                lean_count += 1
+            if "is the play" in lower:
+                is_the_play_count += 1
+            if "small lean to" in lower:
+                small_lean_to_count += 1
+            if any(term in lower for term in SIGNAL_REGISTER_TERMS):
+                signal_register_count += 1
             current_odds_hash = _compute_current_odds_hash(conn, row.match_id)
             if _metadata_errors(row, now=now, current_odds_hash=current_odds_hash):
                 invalid_rows.add(row.match_id)
@@ -425,6 +490,11 @@ def audit_database(db_path: str) -> dict[str, int]:
         "duplicate verdict count": duplicate_count,
         "distinct primary clause count": len(set(primary_clauses)),
         "banned term count": banned_count,
+        "gets_the_nod_count": gets_the_nod_count,
+        "lean_count": lean_count,
+        "is_the_play_count": is_the_play_count,
+        "small_lean_to_count": small_lean_to_count,
+        "signal_register_count": signal_register_count,
     }
 
 
@@ -440,6 +510,17 @@ def main() -> int:
 
     metrics = audit_database(args.db)
     print(format_metrics(metrics))
+    total_rows = metrics["total rows regenerated"]
+    action_shape_count = sum(
+        1
+        for label in (
+            "gets_the_nod_count",
+            "lean_count",
+            "is_the_play_count",
+            "small_lean_to_count",
+        )
+        if metrics[label] > 0
+    )
 
     if (
         metrics["invalid verdict count"] > 0
@@ -448,6 +529,11 @@ def main() -> int:
         or metrics["team-integrity failure count"] > 0
         or metrics["duplicate verdict count"] > 0
         or metrics["distinct primary clause count"] < 15
+        or (
+            total_rows == 0
+            or metrics["signal_register_count"] / total_rows < MIN_SIGNAL_REGISTER_RATIO
+        )
+        or action_shape_count < 2
     ):
         print("AUDIT FAILED", file=sys.stderr)
         return 1
