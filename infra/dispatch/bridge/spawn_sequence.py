@@ -869,9 +869,12 @@ def _codex_review_gate_instruction(dispatch_file: str, *, reviewer: str = "codex
         "## Codex Sub-Agent Review; Outcome: clean | blockers-addressed | needs-changes; "
         "Findings: [P0|P1|P2|P3] file:line — description, or none.\"`. "
         "Embed the sub-agent stdout verbatim under `## Codex Sub-Agent Review` in the "
-        "completion report. HYBRID-MODE CAVEAT (`DISPATCH_MODE=hybrid`, Claude "
-        "executor only): `/codex:review --wait` remains canonical there; in "
-        "pure-codex use only the inline `codex --profile xhigh exec` pattern above."
+        "completion report. HYBRID-MODE CAVEAT (`DISPATCH_MODE=hybrid`): "
+        "`/codex:review --wait` is for interactive Cowork sessions only — "
+        "SessionEnd reliably fires there and guarantees broker cleanup. "
+        "Dispatch-runner-spawned agents must use inline `codex exec` regardless "
+        "of DISPATCH_MODE (SessionEnd unreliable outside interactive sessions "
+        "→ broker orphan risk per INV-CODEX-BROKER-LEAK-ROOT-CAUSE-01)."
     )
 
 
