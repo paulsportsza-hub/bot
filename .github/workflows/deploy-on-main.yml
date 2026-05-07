@@ -40,11 +40,19 @@
 
 name: deploy-on-main
 
+# Auto-trigger on push to main is DISABLED pending T101.
+# T100: OPS-DEPLOY-ON-MAIN-DISABLE-PENDING-T101-01 (this disable, 2026-05-07)
+# T101: re-enable AC = (a) PROD_HOST + PROD_USER + PROD_SSH_KEY secrets configured
+#       on the repo, (b) workflow design ratified by AUDITOR Lane B (runner-side
+#       actions/checkout@v4 + ssh prod 'bash -s' < scripts/deploy_bot_prod.sh <SHA>),
+#       (c) deploy-only SSH key minted (not reusing cowork-arbiter-mzansiedge).
+# To re-enable: restore `push: branches: [main]` block AND meet (a)+(b)+(c).
+# Manual dispatch (workflow_dispatch) remains available for testing.
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "SHA to deploy (defaults to push SHA)"
+        description: "SHA to deploy (defaults to current main HEAD)"
         required: false
 
 concurrency:

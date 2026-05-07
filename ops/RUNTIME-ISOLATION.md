@@ -1,14 +1,16 @@
-# Runtime Isolation — bot-prod read-only checkout
+# Runtime Isolation — bot-prod tree
 
-> **Brief:** FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01 (LEAD, 7 May 2026).
-> **Driver:** dev edits in `/home/paulsportsza/bot/` were leaking into the
+*Authored 2026-05-07 per FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01 (T66) + OPS-DEPLOY-ON-MAIN-DISABLE-PENDING-T101-01 (T100). AUDITOR Lane B placement-gated.*
+
+> **T66 driver:** dev edits in `/home/paulsportsza/bot/` were leaking into the
 > live bot mid-session because Python imports modules lazily from disk.
-> The bot-tree drift watchman surfaces the risk; this document specifies
-> the structural fix.
+> The bot-tree drift watchman surfaces the risk; T66 implemented the structural fix.
+> **T100 driver:** CI auto-deploy workflow first run failed (empty `PROD_SSH_KEY`);
+> auto-trigger disabled until T101 fixes the workflow design and secrets are configured.
 
 ---
 
-## Directory layout
+## Live state
 
 | Path | Role | Writable by `paulsportsza` | Owner of writes |
 |---|---|---|---|
@@ -45,9 +47,25 @@ volume so `chmod -R u-w` on bot-prod/ does not block bytecode caching.
 
 Inspect the active unit with `systemctl cat mzansi-bot.service`.
 
-## Deploy flow
+## Manual deploy command
 
-`scripts/deploy_bot_prod.sh <SHA>`:
+Until T101 ships, deploys are manual. From any machine with SSH access:
+
+```bash
+ssh paulsportsza@37.27.179.53 'bash /home/paulsportsza/bot-prod/scripts/deploy_bot_prod.sh <SHA>'
+```
+
+**Rollback** (if a deploy succeeds the script but a regression appears later):
+
+```bash
+ssh paulsportsza@37.27.179.53 'bash /home/paulsportsza/bot-prod/scripts/deploy_bot_prod_rollback.sh'
+```
+
+Atomic mv: prod → failed, prev → prod. Service restarts. Bot back on previous SHA.
+
+### Deploy script detail
+
+`scripts/deploy_bot_prod.sh <SHA>` (lives in `bot-prod/scripts/`, not `/home/paulsportsza/bot/scripts/`):
 
 1. Verifies `<SHA>` is reachable from `origin/main` in the dev tree.
 2. Builds a fresh `bot-prod-staging/` from a local clone of the dev
@@ -98,6 +116,67 @@ After a rollback, the operator manually inspects `bot-prod-failed/`
 and decides whether to remove or keep it for forensics. Forward-roll
 of `bot-prod-prev/` (i.e. recovering the failed deploy) is not
 automated; re-run `deploy_bot_prod.sh <SHA>` with the next good SHA.
+
+## CI auto-deploy state — DISABLED
+
+`.github/workflows/deploy-on-main.yml` is currently `workflow_dispatch`-only.
+Auto-trigger on push to main was removed by T100 because:
+
+1. `secrets.PROD_HOST`, `secrets.PROD_USER`, `secrets.PROD_SSH_KEY` are not
+   configured on the repo — first run failed in 3s on empty `PROD_SSH_KEY`
+   (commit 9a04332).
+2. Workflow design currently invokes `bash /home/paulsportsza/bot/scripts/deploy_bot_prod.sh $SHA`
+   — reads from the dev tree. Dev tree is not always on main, so the script may
+   not exist on its current branch.
+
+Manual workflow runs from the GitHub UI remain available for testing once secrets land.
+
+## Re-enable AC (T101 — not yet authored)
+
+T101 must satisfy ALL THREE before the auto-trigger is restored:
+
+**(a) Secrets configured** on `paulsportsza-hub/bot` repo:
+- `PROD_HOST` = `37.27.179.53`
+- `PROD_USER` = `paulsportsza`
+- `PROD_SSH_KEY` = private key of a **deploy-only** ed25519 keypair (NOT the
+  existing `cowork-arbiter-mzansiedge` key — tighter scope, easier rotation)
+
+Mint deploy key:
+```bash
+ssh-keygen -t ed25519 -f deploy_key -C "deploy-on-main-mzansiedge" -N ""
+ssh paulsportsza@37.27.179.53 "cat >> ~/.ssh/authorized_keys" < deploy_key.pub
+# paste deploy_key into GitHub Actions secret PROD_SSH_KEY
+rm deploy_key deploy_key.pub  # never commit
+```
+
+**(b) Workflow design ratified** by AUDITOR Lane B — runner-side `actions/checkout@v4`
++ ssh-pipe pattern:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - name: Deploy via ssh-pipe
+    env:
+      SHA: ${{ steps.sha.outputs.sha }}
+    run: |
+      ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" \
+        'bash -s' < scripts/deploy_bot_prod.sh "$SHA"
+```
+
+This pattern is independent of local tree state on the prod box and ships the
+script with the SHA being deployed (no chicken-and-egg if the script changes).
+
+**(c) Trigger restored** in `.github/workflows/deploy-on-main.yml`:
+restore the `push: branches: [main]` block AND remove the T100 disable comment.
+
+## References
+
+- **T66** — `FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01` — runtime isolation foundation:
+  bot-prod tree, systemd drop-in, deploy + rollback scripts.
+- **T100** — `OPS-DEPLOY-ON-MAIN-DISABLE-PENDING-T101-01` — CI auto-trigger disabled;
+  this runbook shipped here.
+- **T101** — `OPS-DEPLOY-ON-MAIN-REENABLE-WITH-RUNNER-SIDE-CHECKOUT-01` — future brief,
+  blocked on Paul minting the deploy-only SSH key.
 
 ## First-deploy runbook (one-time)
 
