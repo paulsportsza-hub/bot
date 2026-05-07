@@ -561,7 +561,18 @@ def _fit_candidate(
     if len(text) <= 200:
         return text
 
-    if is_team_outcome:
+    # Mirror _render_candidate's close-with-price decision so the compact
+    # fallback ALSO carries odds + bookmaker when V2_SINGLE_MENTION is on.
+    # Without this, an overlength price_fact_action would compact to a
+    # priceless close, the wrapper would prepend, and a second team/market
+    # mention would re-appear. Codex round-5 finding.
+    single_mention = _single_mention_enabled()
+    if single_mention:
+        if is_team_outcome:
+            action = _capitalise(_action_with_price(ctx))
+        else:
+            action = _capitalise(_market_action_with_price(ctx))
+    elif is_team_outcome:
         action = _action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
     else:
         action = _market_action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
