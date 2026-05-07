@@ -386,3 +386,48 @@ def test_r6_no_affiliate_soon_with_empty_odds_by_bookmaker():
             for btn in row:
                 assert getattr(btn, "callback_data", "") != "tip:affiliate_soon", \
                     f"tip:affiliate_soon found for {bk_name} ({bk_key}) with empty odds_by_bookmaker"
+
+
+def test_cta_url_matches_cta_bookmaker_name():
+    """Regression: flat multi-bookmaker odds ties must not drift from the verdict bookmaker."""
+    from bot import _build_game_buttons
+
+    match_key = "manchester_city_vs_brentford_2026-05-09"
+    tips = [{
+        "event_id": match_key,
+        "match_id": match_key,
+        "outcome": "Manchester City",
+        "outcome_key": "home",
+        "home_team": "Manchester City",
+        "away_team": "Brentford",
+        "odds": 1.38,
+        "ev": 3.7,
+        "bookmaker": "Supabets",
+        "bookmaker_key": "supabets",
+        "recommended_bookmaker_key": "supabets",
+        # Sportingbet is deliberately first and tied. The CTA must still follow
+        # the verdict-bound Supabets recommendation.
+        "odds_by_bookmaker": {
+            "sportingbet": 1.38,
+            "supabets": 1.38,
+            "gbets": 1.33,
+        },
+        "edge_v2": None,
+        "display_tier": "gold",
+        "edge_rating": "gold",
+    }]
+
+    buttons = _build_game_buttons(
+        tips, match_key, 12345,
+        source="edge_picks", user_tier="diamond", edge_tier="gold",
+    )
+    cta_buttons = [
+        btn for row in buttons for btn in row
+        if "Back" in btn.text and "on" in btn.text and not btn.text.startswith("↩️")
+    ]
+
+    assert cta_buttons, f"No CTA button found: {[btn.text for row in buttons for btn in row]}"
+    cta = cta_buttons[0]
+    assert "Supabets" in cta.text
+    assert cta.url and "supabets.co.za" in cta.url
+    assert "sportingbet" not in cta.url

@@ -23713,8 +23713,9 @@ async def _generate_game_tips_safe(query, ctx, event_id: str, user_id: int, sour
 
 
 def _select_best_bookmaker_for_outcome(
-    odds_by_bk: dict[str, dict[str, float]],
+    odds_by_bk: dict[str, dict[str, float] | float],
     outcome: str,
+    preferred_bookmaker: str | None = None,
 ) -> tuple[str | None, float | None]:
     """Select the bookmaker with the best odds for a specific outcome.
 
@@ -23723,21 +23724,33 @@ def _select_best_bookmaker_for_outcome(
 
     Args:
         odds_by_bk: {"gbets": {"home": 5.00, "draw": 4.60, "away": 1.52}, ...}
+            or flat {"gbets": 5.00, ...} maps that are already outcome-specific.
         outcome: "home", "draw", or "away"
+        preferred_bookmaker: verdict-bound bookmaker to prefer when tied for best
 
     Returns:
         (best_bookmaker_name, best_odds) or (None, None) if no bookmaker has
         odds for this outcome.
     """
     best_bk, best_price = None, float("-inf")
+    preferred_key = (preferred_bookmaker or "").strip().lower()
+    prices_by_key: dict[str, tuple[str, float]] = {}
     for bk, markets in odds_by_bk.items():
-        price = markets.get(outcome) if isinstance(markets, dict) else None
-        if price is None:
+        price = markets.get(outcome) if isinstance(markets, dict) else markets
+        try:
+            price_val = float(price)
+        except (TypeError, ValueError):
             continue
-        if price > best_price:
-            best_bk, best_price = bk, price
+        bk_key = str(bk or "").strip().lower()
+        prices_by_key[bk_key] = (bk, price_val)
+        if price_val > best_price:
+            best_bk, best_price = bk, price_val
     if best_bk is None:
         return (None, None)
+    if preferred_key and preferred_key in prices_by_key:
+        preferred_bk, preferred_price = prices_by_key[preferred_key]
+        if abs(preferred_price - best_price) < 1e-9:
+            return (preferred_bk, preferred_price)
     return (best_bk, best_price)
 
 
@@ -23818,7 +23831,17 @@ def _build_game_buttons(
             # Removed: _er_outcomes_cache override (HOT-TIPS-BUILD-07) — superseded by
             # R9-BUILD-03 selected_outcome + initial normalization.
 
-            _rec_bk_key, _ = _select_best_bookmaker_for_outcome(odds_by_bk, _outcome_key)
+            _preferred_bk_key = (
+                best_ev_tip.get("recommended_bookmaker_key")
+                or best_ev_tip.get("bookmaker_key")
+                or best_ev_tip.get("bookie_key")
+                or ""
+            )
+            _rec_bk_key, _ = _select_best_bookmaker_for_outcome(
+                odds_by_bk,
+                _outcome_key,
+                preferred_bookmaker=_preferred_bk_key,
+            )
             if _rec_bk_key:
                 best_bk = {"bookmaker_key": _rec_bk_key, "affiliate_url": ""}
             else:
