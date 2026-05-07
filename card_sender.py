@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from telegram import InputMediaPhoto
 
@@ -25,6 +26,7 @@ from card_send_context import (
     reset_active_template as _reset_active_template,
     set_active_template as _set_active_template,
 )
+from observability import sentry_capture as _sentry_capture
 
 try:
     import sentry_sdk as _sentry
@@ -159,6 +161,11 @@ async def send_card_or_fallback(
         # so a single stalled render cannot hold the PTB dispatcher slot for up
         # to 90s (Chromium hard timeout). On timeout we log + return, preserving
         # the IMAGE ONLY rule (no user-visible text fallback per docstring).
+        # FIX-BOT-START-LATENCY-DIAGNOSTICS-01: track elapsed_ms so the timeout
+        # path emits a structured Sentry capture (template + deadline + elapsed)
+        # instead of a stringly-typed capture_message. No new bound is added —
+        # the existing 8.0s timeout is unchanged.
+        _render_t0 = time.monotonic()
         try:
             if width is None:
                 png = await asyncio.wait_for(
@@ -177,16 +184,17 @@ async def send_card_or_fallback(
                     timeout=8.0,
                 )
         except asyncio.TimeoutError:
+            _elapsed_ms = round((time.monotonic() - _render_t0) * 1000, 1)
             log.warning(
                 "send_card_or_fallback render exceeded 8s for %s — releasing dispatcher",
                 template,
-                extra={"chat_id": chat_id, "width": width},
+                extra={"chat_id": chat_id, "width": width, "elapsed_ms": _elapsed_ms},
             )
-            if _sentry:
-                _sentry.capture_message(
-                    f"card_render_timeout: template={template} width={width}",
-                    level="warning",
-                )
+            _sentry_capture(
+                "render_timeout",
+                tags={"template": template},
+                extra={"deadline_s": 8.0, "elapsed_ms": _elapsed_ms, "width": width},
+            )
             return
 
         if message_to_edit and message_to_edit.photo:

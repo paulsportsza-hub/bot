@@ -60,8 +60,16 @@ import pathlib
 import re
 import sqlite3
 import textwrap
+import time
 from hashlib import md5 as _md5
 from html import escape as h
+
+from observability import (
+    SLOW_HANDLER_THRESHOLD_MS,
+    phase_timer,
+    sentry_breadcrumb,
+    sentry_capture,
+)
 
 import openrouter_client as anthropic
 from telegram import (
@@ -1479,70 +1487,100 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
 # ── /start ────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # FIX-BOT-START-LATENCY-DIAGNOSTICS-01: phase-by-phase latency emit (no new
+    # bounds, no concurrency change). Threshold 5s — well below the 25s QA
+    # /start window so most slow cases get logged but timeouts still happen
+    # organically. Try/finally guarantees a slow_handler emit even on raise.
+    _t0 = time.monotonic()
+    _phases: dict = {}
     user = update.effective_user
-    db_user = await db.upsert_user(user.id, user.username, user.first_name)
-    analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
-    if not db_user.onboarding_done:
-        analytics_track(user.id, "onboarding_start")
+    sentry_breadcrumb("cmd_start", "enter", user_id=user.id)
+    try:
+        with phase_timer(_phases, "db_user_lookup"):
+            db_user = await db.upsert_user(user.id, user.username, user.first_name)
+        analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
+        if not db_user.onboarding_done:
+            analytics_track(user.id, "onboarding_start")
 
-    # AC-D: card_<match_key> deeplink from @MzansiEdgeAlerts inline button.
-    # Pattern: /start card_<match_key> — route to canonical card detail view.
-    _start_arg = ctx.args[0] if (isinstance(ctx.args, list) and ctx.args and isinstance(ctx.args[0], str)) else ""
-    if _start_arg.startswith("card_"):
-        _card_match_key = _start_arg[len("card_"):]
-        await _handle_card_deeplink(update, ctx, user.id, _card_match_key)
-        return
+        # AC-D: card_<match_key> deeplink from @MzansiEdgeAlerts inline button.
+        # Pattern: /start card_<match_key> — route to canonical card detail view.
+        _start_arg = ctx.args[0] if (isinstance(ctx.args, list) and ctx.args and isinstance(ctx.args[0], str)) else ""
+        if _start_arg.startswith("card_"):
+            _card_match_key = _start_arg[len("card_"):]
+            sentry_breadcrumb("cmd_start", "path=card_deeplink", match_key=_card_match_key)
+            with phase_timer(_phases, "render_send"):
+                await _handle_card_deeplink(update, ctx, user.id, _card_match_key)
+            return
 
-    if db_user.onboarding_done:
-        # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
-        asyncio.create_task(_fetch_schedule_games(user.id))
-        name = h(user.first_name or "")
+        if db_user.onboarding_done:
+            sentry_breadcrumb("cmd_start", "path=onboarded_reply_photo")
+            with phase_timer(_phases, "render_send"):
+                # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
+                asyncio.create_task(_fetch_schedule_games(user.id))
+                name = h(user.first_name or "")
 
-        # BUILD-WELCOME-SCREEN-02: image-first hero welcome
-        _img_path = _welcome_img_path()
-        if _img_path is not None:
-            try:
-                with open(_img_path, "rb") as _fh:
-                    await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user.id))
-            except Exception:
-                log.warning("cmd_start: reply_photo failed for user %d, using text fallback", user.id)
-                await update.message.reply_text(
-                    f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_main_keyboard(),
-                )
+                # BUILD-WELCOME-SCREEN-02: image-first hero welcome
+                _img_path = _welcome_img_path()
+                if _img_path is not None:
+                    try:
+                        with open(_img_path, "rb") as _fh:
+                            await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user.id))
+                    except Exception:
+                        log.warning("cmd_start: reply_photo failed for user %d, using text fallback", user.id)
+                        await update.message.reply_text(
+                            f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=get_main_keyboard(),
+                        )
+                else:
+                    await update.message.reply_text(
+                        f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_main_keyboard(),
+                    )
         else:
-            await update.message.reply_text(
-                f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_main_keyboard(),
-            )
-    else:
-        # Start onboarding — hide sticky keyboard
-        _onboarding_state.pop(user.id, None)  # reset
-        ob = _get_ob(user.id)
-        ob["step"] = "experience"
-        name = h(user.first_name or "")
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome to MzansiEdge, {name}!</b>
+            sentry_breadcrumb("cmd_start", "path=onboarding_send_card_or_fallback")
+            with phase_timer(_phases, "render_send"):
+                # Start onboarding — hide sticky keyboard
+                _onboarding_state.pop(user.id, None)  # reset
+                ob = _get_ob(user.id)
+                ob["step"] = "experience"
+                name = h(user.first_name or "")
+                text = textwrap.dedent(f"""\
+                    <b>🇿🇦 Welcome to MzansiEdge, {name}!</b>
 
-            Let's set up your profile in a few quick steps.
+                    Let's set up your profile in a few quick steps.
 
-            <b>Step 1/5:</b> What's your betting experience?
-        """)
-        # ReplyKeyboardRemove on the welcome photo dismisses the sticky keyboard without a text message
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=update.message.chat_id,
-            template="onboarding_welcome.html",
-            data=build_onboarding_welcome_data(user.first_name or ""),
-            text_fallback=text, markup=ReplyKeyboardRemove(), message_to_edit=None,
-        )
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=update.message.chat_id,
-            template="onboarding_experience.html",
-            data=build_onboarding_experience_data(),
-            text_fallback=text, markup=kb_onboarding_experience(), message_to_edit=None,
-        )
+                    <b>Step 1/5:</b> What's your betting experience?
+                """)
+                # ReplyKeyboardRemove on the welcome photo dismisses the sticky keyboard without a text message
+                await send_card_or_fallback(
+                    bot=_g_bot, chat_id=update.message.chat_id,
+                    template="onboarding_welcome.html",
+                    data=build_onboarding_welcome_data(user.first_name or ""),
+                    text_fallback=text, markup=ReplyKeyboardRemove(), message_to_edit=None,
+                )
+                await send_card_or_fallback(
+                    bot=_g_bot, chat_id=update.message.chat_id,
+                    template="onboarding_experience.html",
+                    data=build_onboarding_experience_data(),
+                    text_fallback=text, markup=kb_onboarding_experience(), message_to_edit=None,
+                )
+    finally:
+        try:
+            _elapsed_ms = round((time.monotonic() - _t0) * 1000, 1)
+            if _elapsed_ms > SLOW_HANDLER_THRESHOLD_MS:
+                log.warning(
+                    "slow_handler cmd_start elapsed_ms=%s phases=%s user=%s",
+                    _elapsed_ms, _phases, user.id,
+                )
+                sentry_capture(
+                    "slow_handler",
+                    tags={"handler": "cmd_start"},
+                    extra={"elapsed_ms": _elapsed_ms, "phases": _phases},
+                )
+        except Exception:
+            pass
 
 
 # ── /menu ────────────────────────────────────────────────
@@ -5700,14 +5738,27 @@ async def format_profile_summary(user_id: int, *, surface: str = "settings") -> 
     return _build_settings_profile_summary(data, edge_summary)
 
 
-async def _collect_profile_card_data(user_id: int) -> dict:
-    """Assemble all state needed for the profile image card (BUILD-PROFILE-CARD-01)."""
-    user = await db.get_user(user_id)
-    user_tier = await get_effective_tier(user_id)
-    trial_active = await db.is_trial_active(user_id)
-    data = await get_profile_data(user_id)
-    edge_summary = await _get_edge_tracker_summary(7)
-    edge_views = await db.get_profile_engagement_stats(user_id)
+async def _collect_profile_card_data(user_id: int, *, phases: dict | None = None) -> dict:
+    """Assemble all state needed for the profile image card (BUILD-PROFILE-CARD-01).
+
+    FIX-BOT-START-LATENCY-DIAGNOSTICS-01: optional phases dict receives per-DB-call
+    elapsed_ms so callers (e.g. _show_profile) can attribute latency to specific
+    awaits without changing the sequential structure. Measurement only.
+    """
+    if phases is None:
+        phases = {}
+    with phase_timer(phases, "db_get_user"):
+        user = await db.get_user(user_id)
+    with phase_timer(phases, "db_get_effective_tier"):
+        user_tier = await get_effective_tier(user_id)
+    with phase_timer(phases, "db_is_trial_active"):
+        trial_active = await db.is_trial_active(user_id)
+    with phase_timer(phases, "db_get_profile_data"):
+        data = await get_profile_data(user_id)
+    with phase_timer(phases, "db_get_edge_tracker_summary"):
+        edge_summary = await _get_edge_tracker_summary(7)
+    with phase_timer(phases, "db_get_profile_engagement_stats"):
+        edge_views = await db.get_profile_engagement_stats(user_id)
 
     first_name = (getattr(user, "first_name", None) or "").strip()
 
@@ -5785,9 +5836,22 @@ async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-async def _render_profile_home_surface(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Return the premium Profile text and its hub buttons."""
-    return await format_profile_summary(user_id, surface="profile"), await _build_profile_buttons(user_id)
+async def _render_profile_home_surface(
+    user_id: int, *, phases: dict | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Return the premium Profile text and its hub buttons.
+
+    FIX-BOT-START-LATENCY-DIAGNOSTICS-01: optional phases dict receives timing
+    for the two internal awaits (format_profile_summary + _build_profile_buttons)
+    so _show_profile can attribute latency. Measurement only.
+    """
+    if phases is None:
+        phases = {}
+    with phase_timer(phases, "format_profile_summary"):
+        text = await format_profile_summary(user_id, surface="profile")
+    with phase_timer(phases, "build_profile_buttons_inner"):
+        buttons = await _build_profile_buttons(user_id)
+    return text, buttons
 
 
 async def _render_profile_plan_surface(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -6489,36 +6553,67 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
 
 
 async def _show_profile(update: Update, user_id: int) -> None:
-    """Show the profile image card from the sticky keyboard (BUILD-PROFILE-CARD-01)."""
-    _sf_chat_id = update.effective_chat.id
-    if _sf_chat_id <= 0:
-        log.warning(
-            "FIX-PROFILE-CARD-SPAM-01: profile card blocked chat_id=%d user_id=%d (non-DM)",
-            _sf_chat_id,
-            user_id,
-        )
-        try:
-            await update.get_bot().send_message(
-                chat_id=_EDGEOPS_CHAT_ID,
-                text=(
-                    f"⚠️ FIX-PROFILE-CARD-SPAM-01: profile card blocked"
-                    f" user={user_id} chat={_sf_chat_id}"
-                ),
+    """Show the profile image card from the sticky keyboard (BUILD-PROFILE-CARD-01).
+
+    FIX-BOT-START-LATENCY-DIAGNOSTICS-01: phase-by-phase latency emit. No new
+    bounds, no concurrency change — measurement only. Threshold 5s.
+    """
+    _t0 = time.monotonic()
+    _phases: dict = {}
+    sentry_breadcrumb("show_profile", "enter", user_id=user_id)
+    try:
+        _sf_chat_id = update.effective_chat.id
+        if _sf_chat_id <= 0:
+            log.warning(
+                "FIX-PROFILE-CARD-SPAM-01: profile card blocked chat_id=%d user_id=%d (non-DM)",
+                _sf_chat_id,
+                user_id,
             )
+            try:
+                await update.get_bot().send_message(
+                    chat_id=_EDGEOPS_CHAT_ID,
+                    text=(
+                        f"⚠️ FIX-PROFILE-CARD-SPAM-01: profile card blocked"
+                        f" user={user_id} chat={_sf_chat_id}"
+                    ),
+                )
+            except Exception:
+                pass
+            return
+        _collect_phases: dict = {}
+        with phase_timer(_phases, "collect_profile_card_data"):
+            card_data = await _collect_profile_card_data(user_id, phases=_collect_phases)
+        _phases["db_calls"] = _collect_phases
+        with phase_timer(_phases, "build_profile_buttons"):
+            buttons = await _build_profile_buttons(user_id)
+        _surface_phases: dict = {}
+        with phase_timer(_phases, "render_profile_home_surface"):
+            summary, _ = await _render_profile_home_surface(user_id, phases=_surface_phases)
+        _phases["surface"] = _surface_phases
+        with phase_timer(_phases, "render_send"):
+            await send_card_or_fallback(
+                bot=update.get_bot(),
+                chat_id=_sf_chat_id,
+                template="profile_home.html",
+                data=card_data,
+                text_fallback=summary,
+                markup=buttons,
+            )
+    finally:
+        try:
+            _elapsed_ms = round((time.monotonic() - _t0) * 1000, 1)
+            if _elapsed_ms > SLOW_HANDLER_THRESHOLD_MS:
+                log.warning(
+                    "slow_handler _show_profile elapsed_ms=%s phases=%s user=%s",
+                    _elapsed_ms, _phases, user_id,
+                )
+                sentry_capture(
+                    "slow_handler",
+                    tags={"handler": "_show_profile"},
+                    extra={"elapsed_ms": _elapsed_ms, "phases": _phases},
+                )
         except Exception:
             pass
-        return
-    card_data = await _collect_profile_card_data(user_id)
-    buttons = await _build_profile_buttons(user_id)
-    summary, _ = await _render_profile_home_surface(user_id)
-    await send_card_or_fallback(
-        bot=update.get_bot(),
-        chat_id=_sf_chat_id,
-        template="profile_home.html",
-        data=card_data,
-        text_fallback=summary,
-        markup=buttons,
-    )
 
 
 async def _show_betway_guide(update: Update) -> None:
