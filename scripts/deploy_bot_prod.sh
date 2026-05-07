@@ -150,8 +150,12 @@ sudo /bin/systemctl restart mzansi-bot.service
 DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT ))
 WAIT_RC=1
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-    if ! systemctl is-active --quiet mzansi-bot.service; then
-        log "service is not active during startup wait"
+    # Only break-on-failure for terminal failed state. Transient
+    # deactivating / inactive / activating during the systemd restart
+    # cycle is normal and must not trigger a false rollback.
+    state=$(systemctl is-active mzansi-bot.service 2>/dev/null || echo "unknown")
+    if [ "$state" = "failed" ]; then
+        log "service entered failed state during startup wait"
         WAIT_RC=2
         break
     fi
