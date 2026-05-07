@@ -12,6 +12,8 @@ from infra.dispatch.bridge.spawn_sequence import (
     MODEL_COMMANDS,
     MultiStepSpawn,
     _agent_cmd,
+    _brief_execution_meta_from_data,
+    _review_gate_instruction,
     resolve_full_stack_route,
 )
 
@@ -157,6 +159,104 @@ def test_hybrid_mode_logs_shadow_route(
 
     assert "shadow_route=" in caplog.text
     assert "actual_agent='Codex XHigh - AUDITOR'" in caplog.text
+
+
+def test_queue_nested_meta_drives_resolver_metadata() -> None:
+    parsed = _brief_execution_meta_from_data(
+        {
+            "brief_id": "BUILD-FULL-STACK-BRIEFMETA-PARSER-01",
+            "agent": "Sonnet - AUDITOR",
+            "klass": "BUILD",
+            "target_repo": "bot",
+            "files_in_scope": ["README.md"],
+            "meta": {
+                "brief_id": "BUILD-FULL-STACK-BRIEFMETA-PARSER-01",
+                "klass": "BUILD",
+                "target_repo": "dispatch",
+                "agent": "Sonnet - AUDITOR",
+                "files": ["dispatch_queue.py", "enqueue.py"],
+                "risk_tags": ["dispatch-state", "review-gate"],
+                "review_mode": "adversarial-review",
+                "title": "BriefExecutionMeta parser",
+                "declared_model_override": "codex-high",
+            },
+        }
+    )
+
+    assert parsed.target_repo == "dispatch"
+    assert parsed.files == ("dispatch_queue.py", "enqueue.py")
+    assert parsed.risk_tags == ("dispatch-state", "review-gate")
+    assert parsed.review_mode == "adversarial-review"
+    assert parsed.title == "BriefExecutionMeta parser"
+    assert parsed.declared_model_override == "codex-high"
+
+
+def test_full_stack_review_gate_uses_resolved_claude_reviewer() -> None:
+    meta = _meta(
+        "FIX-SO45-CODEX-INLINE-SUBAGENT-01",
+        klass="FIX",
+        title="Dispatch governance review-gate inline Codex sub-agent",
+        target_repo="dispatch",
+        files=("cmux_bridge/spawn_sequence.py", "enqueue.py"),
+        risk_tags=("dispatch-state", "review-gate"),
+    )
+    route = resolve_full_stack_route(meta)
+
+    instruction = _review_gate_instruction(
+        meta.brief_id,
+        "/tmp/_briefs/FIX-SO45-CODEX-INLINE-SUBAGENT-01/dispatch.md",
+        {},
+        route,
+    )
+
+    assert "claude_review.py" in instruction
+    assert "--model opus" in instruction
+    assert "--effort max" in instruction
+    assert "--review-mode adversarial" in instruction
+    assert "codex --profile" not in instruction
+
+
+def test_sonnet_reviewer_is_claude_routable() -> None:
+    meta = _meta(
+        "QA-IMAGES-ZERO-TEXT-01",
+        klass="QA",
+        title="Mechanical QA harness contract for zero text image regressions",
+        files=("scripts/qa_images_zero_text_01.py",),
+    )
+    route = resolve_full_stack_route(meta)
+
+    instruction = _review_gate_instruction(
+        meta.brief_id,
+        "/tmp/_briefs/QA-IMAGES-ZERO-TEXT-01/dispatch.md",
+        {},
+        route,
+    )
+
+    assert route.reviewer == "sonnet"
+    assert "claude_review.py" in instruction
+    assert "--model sonnet" in instruction
+
+
+def test_cowork_queue_route_gets_cowork_review_instruction() -> None:
+    meta = _meta(
+        "FIX-NARRATIVE-CACHE-PREMIUM-01",
+        klass="FIX",
+        title="Premium narrative verdict pregen quality gate",
+        files=("narrative_cache.py",),
+        risk_tags=("premium-narrative",),
+    )
+    route = resolve_full_stack_route(meta)
+
+    instruction = _review_gate_instruction(
+        meta.brief_id,
+        "/tmp/_briefs/FIX-NARRATIVE-CACHE-PREMIUM-01/dispatch.md",
+        {},
+        route,
+    )
+
+    assert route.mechanism == "cowork-queue"
+    assert "Cowork queue" in instruction
+    assert "awaiting_review" in instruction
 
 
 def test_multistep_spawn_hybrid_smoke_uses_actual_agent_and_logs_shadow(

@@ -362,24 +362,33 @@ def _normalise_review_mode(value: str) -> str:
 
 
 def _brief_execution_meta_from_data(brief_data: dict[str, Any]) -> BriefExecutionMeta:
-    brief_id = str(brief_data.get("brief_id") or brief_data.get("id") or "UNKNOWN")
-    klass = str(brief_data.get("klass") or brief_data.get("class") or "").upper()
+    raw_meta = brief_data.get("meta")
+    meta_data = raw_meta if isinstance(raw_meta, dict) else {}
+
+    def pick(*keys: str, default: Any = "") -> Any:
+        for source in (meta_data, brief_data):
+            for key in keys:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return value
+        return default
+
+    brief_id = str(pick("brief_id", "id", default="UNKNOWN"))
+    klass = str(pick("klass", "class")).upper()
     if not klass:
         klass = _klass_from_brief_id(brief_id)
     return BriefExecutionMeta(
         brief_id=brief_id,
         klass=klass,
-        target_repo=str(brief_data.get("target_repo") or brief_data.get("repo") or ""),
-        agent=str(brief_data.get("agent") or ""),
-        files=_normalise_tuple(brief_data.get("files") or brief_data.get("files_in_scope")),
-        risk_tags=_normalise_tuple(brief_data.get("risk_tags") or brief_data.get("risk")),
-        review_mode=str(brief_data.get("review_mode") or "review"),
-        title=str(brief_data.get("title") or brief_data.get("brief") or ""),
+        target_repo=str(pick("target_repo", "repo")),
+        agent=str(pick("agent")),
+        files=_normalise_tuple(pick("files", "files_in_scope", default=())),
+        risk_tags=_normalise_tuple(pick("risk_tags", "risk", default=())),
+        review_mode=str(pick("review_mode", default="review")),
+        title=str(pick("title", "brief")),
         declared_model_override=(
             str(
-                brief_data.get("declared_model_override")
-                or brief_data.get("model_override")
-                or ""
+                pick("declared_model_override", "model_override")
             ).strip()
             or None
         ),
@@ -778,7 +787,11 @@ def _normalise_review_gate_mode(value: str) -> str:
 
 def _claude_reviewer_config(reviewer: str) -> tuple[str, str] | None:
     low = reviewer.lower().strip()
-    if not low.startswith(("claude-", "opus-", "sonnet-")):
+    if low in {"sonnet", "claude-sonnet"} or low.startswith("sonnet-"):
+        return "sonnet", "standard"
+    if low in {"opus", "opus-max", "opus-max-effort", "claude-opus"} or low.startswith("opus-"):
+        return "opus", "max"
+    if not low.startswith("claude-"):
         return None
     model = "sonnet" if "sonnet" in low else "opus"
     if "standard" in low:
@@ -825,11 +838,23 @@ def _claude_review_gate_instruction(
     )
 
 
-def _codex_review_gate_instruction(dispatch_file: str) -> str:
+def _codex_profile_for_reviewer(reviewer: str) -> str:
+    low = reviewer.lower().replace("_", "-").strip()
+    if "medium" in low:
+        return "medium"
+    if "xhigh" in low:
+        return "xhigh"
+    if "high" in low:
+        return "high"
+    return "xhigh"
+
+
+def _codex_review_gate_instruction(dispatch_file: str, *, reviewer: str = "codex-xhigh") -> str:
+    profile = _codex_profile_for_reviewer(reviewer)
     return (
-        "SO #45 REVIEW GATE (pure-codex mode, LOCKED 6 May 2026): after commit + push, "
+        "SO #45 REVIEW GATE (Codex reviewer subprocess): after commit + push, "
         "before mark_done.sh, run a fresh inline Codex sub-agent review with "
-        "`DIFF=$(git show --stat --patch HEAD); codex --profile xhigh exec "
+        f"`DIFF=$(git show --stat --patch HEAD); codex --profile {profile} exec "
         "\"You are an INDEPENDENT reviewer with NO prior context. Examine the diff below. "
         "Brief: <BRIEF-ID>. Diff: ${DIFF}. Review for race conditions, auth gaps, "
         "data-loss windows, migration rollback safety, logic errors, contract violations, "
@@ -843,20 +868,40 @@ def _codex_review_gate_instruction(dispatch_file: str) -> str:
     )
 
 
+def _cowork_review_gate_instruction(route: Route) -> str:
+    review_mode = _normalise_review_gate_mode(route.review_mode)
+    return (
+        "SO #45 REVIEW GATE (Cowork queue): after commit + push, file the completion "
+        "report with Status: awaiting_review and do not run mark_done.sh until AUDITOR "
+        "Cowork completes the queued review. "
+        f"Resolved reviewer={route.reviewer}; review_mode={review_mode}; "
+        f"rationale={route.rationale}. "
+        "Embed the resulting `## Cross-Model Review` block verbatim in the completion report."
+    )
+
+
 def _review_gate_instruction(
     brief_id: str,
     dispatch_file: str,
     brief_data: dict[str, Any],
+    route: Route | None = None,
 ) -> str:
-    mechanism = _route_field(brief_data, "mechanism").lower()
-    reviewer = _route_field(brief_data, "reviewer")
+    mechanism = route.mechanism if route is not None else _route_field(brief_data, "mechanism").lower()
+    reviewer = route.reviewer if route is not None else _route_field(brief_data, "reviewer")
+    review_mode = (
+        _normalise_review_gate_mode(route.review_mode)
+        if route is not None
+        else _normalise_review_gate_mode(_route_field(brief_data, "review_mode"))
+    )
+    if mechanism == "cowork-queue" and route is not None:
+        return _cowork_review_gate_instruction(route)
     if mechanism == "subprocess" and _claude_reviewer_config(reviewer):
         return _claude_review_gate_instruction(
             brief_id,
             reviewer=reviewer,
-            review_mode=_normalise_review_gate_mode(_route_field(brief_data, "review_mode")),
+            review_mode=review_mode,
         )
-    return _codex_review_gate_instruction(dispatch_file)
+    return _codex_review_gate_instruction(dispatch_file, reviewer=reviewer)
 
 
 class SpawnProtocol(Protocol):
@@ -884,6 +929,12 @@ class MultiStepSpawn:
         meta = _brief_execution_meta_from_data(brief_data)
         # _agent_cmd raises on empty/unknown in hybrid mode — no silent Sonnet default.
         claude_cmd = _claude_cmd(agent, meta)
+        route = resolve_full_stack_route(meta)
+        review_route = (
+            route
+            if os.environ.get("DISPATCH_MODE", "hybrid").lower() == "full-stack"
+            else None
+        )
         dispatch_block = _build_dispatch_block(brief_data)
         brief_id = str(brief_data.get("brief_id", "UNKNOWN"))
 
@@ -1012,7 +1063,7 @@ class MultiStepSpawn:
         # Single-line = no premature Enter submission, no chunking issues,
         # no escape sequence guessing. The dispatch block is on disk; claude
         # reads it as its first action.
-        review_gate = _review_gate_instruction(brief_id, dispatch_file, brief_data)
+        review_gate = _review_gate_instruction(brief_id, dispatch_file, brief_data, review_route)
         single_line_kickoff = (
             f"Read {dispatch_file} and execute the brief described therein. "
             f"This file contains the canonical dispatch block (BRIEF-ID, Notion URL, "
