@@ -1493,9 +1493,11 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # organically. Try/finally guarantees a slow_handler emit even on raise.
     _t0 = time.monotonic()
     _phases: dict = {}
-    user = update.effective_user
-    sentry_breadcrumb("cmd_start", "enter", user_id=user.id)
+    _user_id: int | None = None
     try:
+        user = update.effective_user
+        _user_id = getattr(user, "id", None)
+        sentry_breadcrumb("cmd_start", "enter", user_id=_user_id)
         with phase_timer(_phases, "db_user_lookup"):
             db_user = await db.upsert_user(user.id, user.username, user.first_name)
         analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
@@ -1572,7 +1574,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if _elapsed_ms > SLOW_HANDLER_THRESHOLD_MS:
                 log.warning(
                     "slow_handler cmd_start elapsed_ms=%s phases=%s user=%s",
-                    _elapsed_ms, _phases, user.id,
+                    _elapsed_ms, _phases, _user_id,
                 )
                 sentry_capture(
                     "slow_handler",

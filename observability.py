@@ -58,15 +58,21 @@ def sentry_capture(
 def phase_timer(phases: dict, name: str) -> Iterator[None]:
     """Time a block and store elapsed_ms in `phases[name]`.
 
-    Always populates phases[name], even on exception. Never raises (failures
-    inside the timing bookkeeping itself are swallowed so instrumentation can
-    not interrupt the handler body).
+    Always populates phases[name] when the start timestamp captured cleanly,
+    even on exception inside the block. Never raises — every code path
+    (including the start-timestamp capture itself) is guarded so that an
+    instrumentation failure on enter or exit can not interrupt the handler.
     """
-    t0 = time.monotonic()
+    t0: float | None = None
+    try:
+        t0 = time.monotonic()
+    except Exception:
+        pass
     try:
         yield
     finally:
         try:
-            phases[name] = round((time.monotonic() - t0) * 1000, 1)
+            if t0 is not None:
+                phases[name] = round((time.monotonic() - t0) * 1000, 1)
         except Exception:
             pass
