@@ -140,11 +140,12 @@ fi
 
 # === 7. Restart + readiness wait ==========================================
 log "restarting mzansi-bot.service"
-# Capture an upper-bound restart timestamp BEFORE asking systemd to restart so
-# the readiness scan only matches a Startup Truth emitted by THIS restart.
-# Using a sliding "30 sec ago" window (Codex P1) would falsely succeed if a
-# previous restart's Startup Truth still sat inside the window.
-RESTART_TS=$(date '+%Y-%m-%d %H:%M:%S')
+# Anchor the readiness scan to a journal cursor captured *before* the
+# restart. Cursor-based filtering is independent of seconds-resolution
+# timestamps, so a Startup Truth emitted in the same wall-clock second
+# as RESTART_TS (Codex round-2 P2) cannot falsely satisfy readiness.
+PRE_CURSOR=$(sudo -n journalctl -u mzansi-bot --no-pager --show-cursor -n 1 2>/dev/null \
+              | awk '/^-- cursor:/{print $3}')
 sudo /bin/systemctl restart mzansi-bot.service
 
 DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT ))
@@ -153,7 +154,13 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     # Only break-on-failure for terminal failed state. Transient
     # deactivating / inactive / activating during the systemd restart
     # cycle is normal and must not trigger a false rollback.
-    state=$(systemctl is-active mzansi-bot.service 2>/dev/null || echo "unknown")
+    # `is-active` prints `failed` and exits 3 for failed units; the
+    # previous `... || echo unknown` form was concatenating both
+    # outputs (`failed\nunknown`), so the equality test never fired.
+    # Keep stderr discarded but capture stdout-only and only fall back
+    # to "unknown" when stdout is empty (pgrep-style).
+    state=$(systemctl is-active mzansi-bot.service 2>/dev/null)
+    state="${state:-unknown}"
     if [ "$state" = "failed" ]; then
         log "service entered failed state during startup wait"
         WAIT_RC=2
@@ -163,13 +170,19 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     # non-sudo invocation only sees user-session logs and misses the system
     # service entirely. --since pinned to RESTART_TS so a stale Startup Truth
     # from the previous run cannot match (Codex P1).
-    # Use `grep -c` (consumes all input) rather than `grep -q` because
-    # `grep -q` exits early on first match, which combined with `set -o
-    # pipefail` (set above) makes the pipeline return non-zero (SIGPIPE
-    # on journalctl) and the `if` test evaluates to false even after a
-    # real match. Burnt twice in this brief's iteration. Logging the
-    # match count helps the next operator debug a failed wait.
-    journal_st=$(sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    # `grep -c` (not -q) so the pipeline consumes all of journalctl's
+    # output. Combined with `set -o pipefail`, an early-exit grep would
+    # send SIGPIPE to journalctl, fail the pipeline, and falsely keep
+    # waiting even after a real Startup Truth match. Anchored at
+    # PRE_CURSOR so we only match events emitted *after* this restart.
+    if [ -n "$PRE_CURSOR" ]; then
+        journal_st=$(sudo -n journalctl -u mzansi-bot --no-pager --after-cursor="$PRE_CURSOR" 2>/dev/null | grep -c 'Startup Truth' || true)
+    else
+        # First-ever boot has no prior cursor; fall back to a generous
+        # since window. Strictly less safe but only hit on machines with
+        # an empty journal.
+        journal_st=$(sudo -n journalctl -u mzansi-bot --since "@$(( $(date +%s) - STARTUP_TIMEOUT ))" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    fi
     log "wait state=$state startup_truth=$journal_st"
     if [ "$journal_st" -gt 0 ]; then
         WAIT_RC=0

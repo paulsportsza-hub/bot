@@ -43,25 +43,33 @@ if [ "${DEPLOY_SKIP_RESTART:-0}" = "1" ]; then
 fi
 
 log "restarting mzansi-bot.service"
-# RESTART_TS captured pre-restart so the readiness scan only matches the
-# Startup Truth emitted by THIS rollback (Codex P1 — same fix as deploy script).
-RESTART_TS=$(date '+%Y-%m-%d %H:%M:%S')
+# Anchor readiness scan to a cursor captured pre-restart. See deploy
+# script for rationale (Codex round-2 P2 — second-resolution timestamps
+# can falsely match a Startup Truth from the same wall-clock second).
+PRE_CURSOR=$(sudo -n journalctl -u mzansi-bot --no-pager --show-cursor -n 1 2>/dev/null \
+              | awk '/^-- cursor:/{print $3}')
 sudo /bin/systemctl restart mzansi-bot.service
 
 DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT ))
 WAIT_RC=1
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-    state=$(systemctl is-active mzansi-bot.service 2>/dev/null || echo "unknown")
+    # Capture stdout-only; `... || echo unknown` concatenated `failed\nunknown`
+    # under bash's command-substitution rules (Codex round-2 P3), so the
+    # `failed` equality check never fired.
+    state=$(systemctl is-active mzansi-bot.service 2>/dev/null)
+    state="${state:-unknown}"
     if [ "$state" = "failed" ]; then
         log "service entered failed state during startup wait"
         WAIT_RC=2
         break
     fi
-    # Use `grep -c` (consumes all input) rather than `grep -q` because
-    # `grep -q` exits early on first match, which combined with `set -o
-    # pipefail` makes the pipeline return non-zero (SIGPIPE on journalctl)
-    # and the `if` test evaluates to false even after a real match.
-    journal_st=$(sudo -n journalctl -u mzansi-bot --since "$RESTART_TS" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    # `grep -c` (not -q) avoids SIGPIPE-under-pipefail false negatives.
+    # Anchored at PRE_CURSOR so only post-restart events are scanned.
+    if [ -n "$PRE_CURSOR" ]; then
+        journal_st=$(sudo -n journalctl -u mzansi-bot --no-pager --after-cursor="$PRE_CURSOR" 2>/dev/null | grep -c 'Startup Truth' || true)
+    else
+        journal_st=$(sudo -n journalctl -u mzansi-bot --since "@$(( $(date +%s) - STARTUP_TIMEOUT ))" --no-pager 2>/dev/null | grep -c 'Startup Truth' || true)
+    fi
     if [ "$journal_st" -gt 0 ]; then
         WAIT_RC=0
         break

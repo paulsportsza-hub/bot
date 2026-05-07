@@ -98,6 +98,7 @@ def test_bot_py_mtime_before_process_start():
     assert mtime <= start_epoch, (
         f"DEPLOY-DISCIPLINE-1 violation (BUILD-NARRATIVE-WATERTIGHT-01 D.4): "
         f"bot.py mtime {mtime:.0f} > process start {start_epoch:.0f} "
-        f"(PID {pid}). Live runtime predates working-tree changes. Restart "
-        f"the bot from /home/paulsportsza/bot/ per D2 before proceeding."
+        f"(PID {pid}). Live runtime predates working-tree changes. "
+        f"Re-deploy via scripts/deploy_bot_prod.sh per "
+        f"FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01 before proceeding."
     )
