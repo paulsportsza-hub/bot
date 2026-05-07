@@ -286,7 +286,8 @@ def test_fetch_full_path_with_cache_miss_then_hit():
         mock_fetch = AsyncMock(return_value=api_payload)
         with patch.dict(os.environ, {"FOOTBALL_DATA_ORG_KEY": "fake"}, clear=False), \
              patch.object(fd, "_fetch_competition_window", mock_fetch), \
-             patch.object(fd, "connect_odds_db", lambda: sqlite3.connect(db_path)):
+             patch.object(fd, "connect_odds_db", lambda: sqlite3.connect(db_path)), \
+             patch.object(fd, "connect_odds_db_readonly", lambda: sqlite3.connect(db_path)):
             r1 = _aiocall(fd.fetch_fixture_meta(
                 "bayern_munich_vs_paris_saint_germain_2026-05-06",
                 "champions_league",
