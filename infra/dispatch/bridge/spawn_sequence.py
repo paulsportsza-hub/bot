@@ -20,12 +20,15 @@ Phase-0 summary (probed 2026-04-30 on server):
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import logging
 import os
+import re
 import secrets
+import shlex
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 log = logging.getLogger(__name__)
@@ -39,6 +42,206 @@ _SERVER_DEFAULT = "paulsportsza@37.27.179.53"
 # `SEMAPHORcodex --profile high` corruption observed 2026-05-02.
 _PROMPT_WAIT_POLL_S: float = 0.2
 _PROMPT_WAIT_TIMEOUT_S: float = 60.0
+
+MODEL_COMMANDS = {
+    "sonnet": ["claude", "--model", "sonnet"],
+    "opus-max": ["claude", "--model", "opus", "--effort", "max"],
+    "codex-medium": ["codex", "--profile", "medium"],
+    "codex-high": ["codex", "--profile", "high"],
+    "codex-xhigh": ["codex", "--profile", "xhigh"],
+}
+
+TASK_SIGNATURES = [
+    {
+        "name": "payments_auth_settlement",
+        "matches": {
+            "paths": ["*stitch*", "*payment*", "*subscription*", "*checkout*", "*auth*", "*settlement*"],
+            "risk_tags": ["money", "auth", "settlement"],
+            "brief_terms": ["payment", "checkout", "billing", "auth", "refund"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "adversarial",
+        "mechanism": "subprocess",
+        "boundary_score": 1000,
+        "reason": "irreversible value or identity boundary (mandatory adversarial)",
+    },
+    {
+        "name": "alerts_dm_fanout",
+        "matches": {
+            "risk_tags": ["fanout", "claim-before-send"],
+            "brief_terms": ["alert", "dm", "double-post", "notification", "fanout", "publish-batch"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "adversarial",
+        "mechanism": "subprocess",
+        "boundary_score": 1000,
+        "reason": "fanout boundary (mandatory adversarial per FIX-ALERTS-DOUBLE-POST-DEDUP-01)",
+    },
+    {
+        "name": "dispatch_governance_state",
+        "matches": {
+            "repos": ["dispatch"],
+            "paths": ["dispatch_promoter.py", "enqueue.py", "cmux_bridge/*.py", "mark_done.sh", "spawn_sequence.py"],
+            "risk_tags": ["dispatch-state", "review-gate"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "adversarial",
+        "mechanism": "subprocess",
+        "boundary_score": 1000,
+        "reason": "dispatch-governance boundary - process bugs make future governance lie",
+    },
+    {
+        "name": "non_rollback_migration",
+        "matches": {
+            "risk_tags": ["migration", "schema-change", "backfill"],
+            "brief_terms": ["migration", "backfill", "schema"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "adversarial",
+        "mechanism": "subprocess",
+        "boundary_score": 1000,
+        "reason": "persistent production-data boundary",
+    },
+    {
+        "name": "runtime_concurrency_cache",
+        "matches": {
+            "paths": ["bot.py", "card_sender.py", "scripts/pregenerate_narratives.py"],
+            "brief_terms": ["cache", "async", "lock", "timeout", "dedupe", "claim", "race"],
+            "risk_tags": ["concurrency", "cache"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "runtime concurrency/cache class - recent incident density",
+    },
+    {
+        "name": "premium_narrative_cache",
+        "matches": {
+            "paths": ["narrative_*.py", "evidence_pack.py", "pregenerate_narratives.py", "card_data.py"],
+            "brief_terms": ["narrative", "verdict", "premium", "pregen", "quality gate"],
+            "risk_tags": ["premium-narrative"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "opus-max",
+        "review_mode": "review",
+        "mechanism": "cowork-queue",
+        "reason": "premium trust boundary - Cowork queue review for context",
+    },
+    {
+        "name": "grep_trace_call_site",
+        "matches": {
+            "klass": ["INV", "QA"],
+            "brief_terms": ["call site", "grep", "audit", "contract", "harness", "parser"],
+        },
+        "executor": "codex-xhigh",
+        "reviewer": "sonnet",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "code archaeology - Codex strong, Sonnet review sufficient",
+    },
+    {
+        "name": "judgement_launch_narrative",
+        "matches": {
+            "klass": ["INV", "QA", "NARRATIVE"],
+            "brief_terms": ["launch", "premium", "narrative quality", "no-go", "calibration", "brand", "doctrine"],
+        },
+        "executor": "opus-max",
+        "reviewer": "codex-xhigh",
+        "review_mode": "review",
+        "mechanism": "cowork-queue",
+        "reason": "Opus judgement domain - Cowork queue review",
+    },
+    {
+        "name": "bounded_fix_routine",
+        "matches": {
+            "klass": ["FIX"],
+            "prod_file_count_lte": 3,
+            "risk_tags_absent": ["money", "auth", "migration", "fanout", "dispatch-state", "premium-narrative"],
+        },
+        "executor": "sonnet",
+        "reviewer": "codex-medium",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "Sonnet high-volume routine + cheapest competent reviewer",
+    },
+    {
+        "name": "trivial_mechanical",
+        "matches": {
+            "klass": ["FIX-S", "DOCS", "OPS"],
+            "prod_file_count_lte": 1,
+            "brief_terms": ["typo", "rename", "anchor", "mirror sync"],
+        },
+        "executor": "codex-medium",
+        "reviewer": "sonnet",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "trivial mechanical - cheapest Codex tier suffices",
+    },
+    {
+        "name": "docs_routine",
+        "matches": {
+            "klass": ["DOCS", "OPS"],
+            "prod_file_count_lte": 3,
+            "risk_tags_absent": ["dispatch-state", "review-gate", "doctrine"],
+        },
+        "executor": "sonnet",
+        "reviewer": "codex-medium",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "routine docs/ops - cheap rotation",
+    },
+    {
+        "name": "content_low_stakes",
+        "matches": {
+            "klass": ["CONTENT"],
+            "risk_tags_absent": ["premium", "responsible-gambling", "launch"],
+        },
+        "executor": "sonnet",
+        "reviewer": "codex-medium",
+        "review_mode": "review",
+        "mechanism": "subprocess",
+        "reason": "routine content",
+    },
+    {
+        "name": "content_premium",
+        "matches": {
+            "klass": ["CONTENT"],
+            "risk_tags": ["premium", "responsible-gambling", "launch"],
+        },
+        "executor": "opus-max",
+        "reviewer": "codex-high",
+        "review_mode": "review",
+        "mechanism": "cowork-queue",
+        "reason": "premium content - Opus voice + Cowork brand context review",
+    },
+]
+
+
+@dataclass(frozen=True)
+class BriefExecutionMeta:
+    brief_id: str
+    klass: str
+    target_repo: str
+    agent: str
+    files: tuple[str, ...] = ()
+    risk_tags: tuple[str, ...] = ()
+    review_mode: str = "review"
+    title: str = ""
+    declared_model_override: str | None = None
+
+
+@dataclass(frozen=True)
+class Route:
+    executor_cmd: list[str]
+    reviewer: str
+    review_mode: Literal["review", "adversarial"]
+    mechanism: Literal["subprocess", "cowork-queue"]
+    rationale: str
 
 
 class SpawnTimeoutError(RuntimeError):
@@ -127,14 +330,341 @@ def _model_flags(agent: str) -> list[str]:
     )
 
 
-def _agent_cmd(agent: str) -> str:
+def _normalise_tuple(value: Any) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if isinstance(value, str):
+        raw_items = value.replace("\n", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    items: list[str] = []
+    for item in raw_items:
+        cleaned = str(item).strip().lstrip("-").strip()
+        if cleaned:
+            items.append(cleaned)
+    return tuple(items)
+
+
+def _klass_from_brief_id(brief_id: str) -> str:
+    if not brief_id:
+        return ""
+    prefix = brief_id.split("-", 1)[0].upper()
+    return prefix.rstrip()
+
+
+def _normalise_review_mode(value: str) -> str:
+    low = value.lower().strip()
+    if low in {"adversarial", "adversarial-review"}:
+        return "adversarial"
+    return "review"
+
+
+def _brief_execution_meta_from_data(brief_data: dict[str, Any]) -> BriefExecutionMeta:
+    brief_id = str(brief_data.get("brief_id") or brief_data.get("id") or "UNKNOWN")
+    klass = str(brief_data.get("klass") or brief_data.get("class") or "").upper()
+    if not klass:
+        klass = _klass_from_brief_id(brief_id)
+    return BriefExecutionMeta(
+        brief_id=brief_id,
+        klass=klass,
+        target_repo=str(brief_data.get("target_repo") or brief_data.get("repo") or ""),
+        agent=str(brief_data.get("agent") or ""),
+        files=_normalise_tuple(brief_data.get("files") or brief_data.get("files_in_scope")),
+        risk_tags=_normalise_tuple(brief_data.get("risk_tags") or brief_data.get("risk")),
+        review_mode=str(brief_data.get("review_mode") or "review"),
+        title=str(brief_data.get("title") or brief_data.get("brief") or ""),
+        declared_model_override=(
+            str(
+                brief_data.get("declared_model_override")
+                or brief_data.get("model_override")
+                or ""
+            ).strip()
+            or None
+        ),
+    )
+
+
+def _klass_matches(actual: str, expected: str, brief_id: str) -> bool:
+    actual = (actual or _klass_from_brief_id(brief_id)).upper()
+    expected = expected.upper()
+    if expected == "FIX":
+        return actual == "FIX" or actual.startswith("FIX-") or brief_id.upper().startswith("FIX-")
+    return actual == expected
+
+
+def _brief_text(meta: BriefExecutionMeta) -> str:
+    return f"{meta.brief_id} {meta.title}".lower().replace("_", "-")
+
+
+def _term_matches(meta: BriefExecutionMeta, term: str) -> bool:
+    text = _brief_text(meta)
+    spaced = text.replace("-", " ")
+    needle = term.lower()
+    return needle in text or needle.replace("-", " ") in spaced
+
+
+def _path_matches(path: str, pattern: str) -> bool:
+    clean_path = str(path).strip().lower().replace("\\", "/")
+    clean_path = clean_path.split(" ", 1)[0].lstrip("./")
+    clean_pattern = pattern.lower().replace("\\", "/")
+    basename = clean_path.rsplit("/", 1)[-1]
+    return (
+        fnmatch.fnmatch(clean_path, clean_pattern)
+        or fnmatch.fnmatch(basename, clean_pattern)
+        or fnmatch.fnmatch(clean_path, f"*/{clean_pattern}")
+    )
+
+
+def _is_production_file(path: str) -> bool:
+    clean_path = str(path).strip().lower().replace("\\", "/")
+    clean_path = clean_path.split(" ", 1)[0].lstrip("./")
+    if not clean_path:
+        return False
+    if clean_path.startswith("tests/") or "/tests/" in clean_path:
+        return False
+    basename = clean_path.rsplit("/", 1)[-1]
+    if basename.startswith("test_") or basename.endswith("_test.py"):
+        return False
+    if clean_path.endswith((".md", ".markdown", ".rst", ".txt")):
+        return False
+    return True
+
+
+def _production_file_count(meta: BriefExecutionMeta) -> int:
+    return sum(1 for path in meta.files if _is_production_file(path))
+
+
+def signature_score(signature: dict[str, Any], meta: BriefExecutionMeta) -> int:
+    matches = signature.get("matches", {})
+    if not isinstance(matches, dict):
+        return 0
+
+    prod_limit = matches.get("prod_file_count_lte")
+    if prod_limit is not None and _production_file_count(meta) > int(prod_limit):
+        return 0
+
+    risk_tags = {tag.lower() for tag in meta.risk_tags}
+    absent = {str(tag).lower() for tag in matches.get("risk_tags_absent", [])}
+    if absent & risk_tags:
+        return 0
+
+    score = 0
+    nonklass_score = 0
+
+    klasses = matches.get("klass", [])
+    if klasses and any(_klass_matches(meta.klass, str(klass), meta.brief_id) for klass in klasses):
+        score += 15
+
+    repos = {str(repo).lower() for repo in matches.get("repos", [])}
+    if repos and meta.target_repo.lower() in repos:
+        score += 25
+        nonklass_score += 25
+
+    paths = matches.get("paths", [])
+    if paths and any(_path_matches(path, str(pattern)) for path in meta.files for pattern in paths):
+        score += 35
+        nonklass_score += 35
+
+    terms = matches.get("brief_terms", [])
+    if terms and any(_term_matches(meta, str(term)) for term in terms):
+        score += 40
+        nonklass_score += 40
+
+    expected_risks = {str(tag).lower() for tag in matches.get("risk_tags", [])}
+    if expected_risks and expected_risks & risk_tags:
+        score += 100
+        nonklass_score += 100
+
+    class_only_signature = (
+        terms
+        and nonklass_score == 0
+        and "risk_tags_absent" not in matches
+        and "prod_file_count_lte" not in matches
+    )
+    if class_only_signature:
+        return 0
+    return score
+
+
+def _route_for_models(
+    executor: str,
+    reviewer: str,
+    *,
+    review_mode: str = "review",
+    mechanism: str = "subprocess",
+    rationale: str,
+) -> Route:
+    return Route(
+        executor_cmd=list(MODEL_COMMANDS[executor]),
+        reviewer=reviewer,
+        review_mode=_normalise_review_mode(review_mode),  # type: ignore[arg-type]
+        mechanism=mechanism,  # type: ignore[arg-type]
+        rationale=rationale,
+    )
+
+
+def _class_default_route(meta: BriefExecutionMeta) -> Route:
+    klass = (meta.klass or _klass_from_brief_id(meta.brief_id)).upper()
+    prod_count = _production_file_count(meta)
+    if klass.startswith("FIX"):
+        if prod_count > 3:
+            return _route_for_models(
+                "codex-xhigh",
+                "opus-max",
+                review_mode=meta.review_mode,
+                rationale="class default: FIX-L",
+            )
+        reviewer = "codex-medium" if prod_count <= 1 else "codex-high"
+        return _route_for_models(
+            "sonnet",
+            reviewer,
+            review_mode=meta.review_mode,
+            rationale=f"class default: FIX with {prod_count} production files",
+        )
+    if klass == "BUILD":
+        return _route_for_models(
+            "sonnet",
+            "codex-high",
+            review_mode=meta.review_mode,
+            rationale="class default: BUILD bounded scope",
+        )
+    if klass == "QA":
+        return _route_for_models(
+            "codex-xhigh",
+            "sonnet",
+            review_mode=meta.review_mode,
+            rationale="class default: QA mechanical harness/visual diff",
+        )
+    if klass == "NARRATIVE":
+        return _route_for_models(
+            "codex-xhigh",
+            "opus-max",
+            review_mode=meta.review_mode,
+            rationale="class default: NARRATIVE validator/prompt edits",
+        )
+    if klass in {"OPS", "DOCS", "CONTENT", "INV"}:
+        return _route_for_models(
+            "sonnet",
+            "codex-medium",
+            review_mode=meta.review_mode,
+            rationale=f"class default: {klass or 'unknown'}",
+        )
+    return _route_for_models(
+        "sonnet",
+        "codex-medium",
+        review_mode=meta.review_mode,
+        rationale="class default: unknown metadata",
+    )
+
+
+def _model_key_from_override(value: str) -> str | None:
+    low = value.lower().replace("_", "-").strip()
+    if low in MODEL_COMMANDS:
+        return low
+    if "opus" in low and "max" in low:
+        return "opus-max"
+    if "sonnet" in low:
+        return "sonnet"
+    if "codex" in low and "medium" in low:
+        return "codex-medium"
+    if "codex" in low and "xhigh" in low:
+        return "codex-xhigh"
+    if "codex" in low and "high" in low:
+        return "codex-high"
+    return None
+
+
+def _route_from_override(meta: BriefExecutionMeta) -> Route | None:
+    if not meta.declared_model_override:
+        return None
+    executor = _model_key_from_override(meta.declared_model_override)
+    if executor is None:
+        log.warning(
+            "full-stack declared_model_override=%r did not map to MODEL_COMMANDS",
+            meta.declared_model_override,
+        )
+        return None
+    default = _class_default_route(meta)
+    return _route_for_models(
+        executor,
+        default.reviewer,
+        review_mode=default.review_mode,
+        mechanism=default.mechanism,
+        rationale=f"declared model override: {meta.declared_model_override}",
+    )
+
+
+def _route_from_signature(signature: dict[str, Any], meta: BriefExecutionMeta) -> Route:
+    return _route_for_models(
+        str(signature["executor"]),
+        str(signature["reviewer"]),
+        review_mode=str(signature.get("review_mode", meta.review_mode)),
+        mechanism=str(signature.get("mechanism", "subprocess")),
+        rationale=f"{signature.get('name')}: {signature.get('reason', '')}",
+    )
+
+
+def _ambiguous_route(meta: BriefExecutionMeta, signatures: list[dict[str, Any]]) -> Route:
+    mandatory = [sig for sig in signatures if int(sig.get("boundary_score", 0) or 0) > 0]
+    if len(mandatory) == 1:
+        chosen = mandatory[0]
+    else:
+        chosen = next(
+            (sig for sig in signatures if sig.get("executor") == "codex-xhigh"),
+            signatures[0],
+        )
+    log.warning(
+        "full-stack route ambiguity brief=%s candidates=%s chosen=%s",
+        meta.brief_id,
+        [sig.get("name") for sig in signatures],
+        chosen.get("name"),
+    )
+    return _route_from_signature(chosen, meta)
+
+
+def resolve_full_stack_route(meta: BriefExecutionMeta) -> Route:
+    override = _route_from_override(meta)
+    if override is not None:
+        return override
+
+    matches: list[tuple[int, dict[str, Any]]] = []
+    for signature in TASK_SIGNATURES:
+        score = signature_score(signature, meta)
+        if score > 0:
+            matches.append((score + int(signature.get("boundary_score", 0) or 0), signature))
+
+    if not matches:
+        return _class_default_route(meta)
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    if len(matches) >= 2 and matches[0][0] == matches[1][0]:
+        return _ambiguous_route(meta, [item[1] for item in matches if item[0] == matches[0][0]])
+
+    return _route_from_signature(matches[0][1], meta)
+
+
+def _agent_cmd(agent: str, meta: BriefExecutionMeta | None = None) -> str:
     """Build the executor CLI command for this brief's Agent select.
 
     Returns a shell-ready command string like 'codex --profile xhigh' or
     'claude --model sonnet'. Routing v1 dispatches to either codex or
     claude depending on the agent string."""
-    parts = _model_flags(agent)
-    return " ".join(parts)
+    mode = os.environ.get("DISPATCH_MODE", "hybrid").lower()
+    if mode == "pure-codex":
+        return shlex.join(MODEL_COMMANDS["codex-xhigh"])
+    if mode == "full-stack":
+        if meta is None:
+            log.warning("full-stack with missing meta - falling back to hybrid")
+            return shlex.join(_model_flags(agent))
+        route = resolve_full_stack_route(meta)
+        log.info("full_stack_route=%s", route)
+        return shlex.join(route.executor_cmd)
+    if meta is not None:
+        route = resolve_full_stack_route(meta)
+        log.info("shadow_route=%s actual_agent=%r", route, agent)
+    return shlex.join(_model_flags(agent))
 
 
 # Backwards-compat alias — older code in this module called _claude_cmd.
@@ -226,6 +756,109 @@ def _build_dispatch_block(brief_data: dict[str, Any]) -> str:
     )
 
 
+def _route_field(brief_data: dict[str, Any], key: str) -> str:
+    """Return a route field from dict/object route metadata if present."""
+    route = brief_data.get("route") or brief_data.get("Route") or {}
+    value: Any = None
+    if isinstance(route, dict):
+        value = route.get(key) or route.get(key.replace("_", "-"))
+    else:
+        value = getattr(route, key, None)
+    if value in (None, ""):
+        value = brief_data.get(key) or brief_data.get(f"route_{key}")
+    return str(value or "").strip()
+
+
+def _normalise_review_gate_mode(value: str) -> str:
+    low = value.lower().strip()
+    if low in {"adversarial", "adversarial-review"}:
+        return "adversarial"
+    return "standard"
+
+
+def _claude_reviewer_config(reviewer: str) -> tuple[str, str] | None:
+    low = reviewer.lower().strip()
+    if not low.startswith(("claude-", "opus-", "sonnet-")):
+        return None
+    model = "sonnet" if "sonnet" in low else "opus"
+    if "standard" in low:
+        effort = "standard"
+    elif "max" in low or model == "opus":
+        effort = "max"
+    else:
+        effort = "standard"
+    return model, effort
+
+
+def _safe_review_path_id(brief_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", brief_id) or "UNKNOWN"
+
+
+def _claude_review_gate_instruction(
+    brief_id: str,
+    *,
+    reviewer: str,
+    review_mode: str,
+) -> str:
+    config = _claude_reviewer_config(reviewer)
+    if config is None:
+        raise ValueError(f"reviewer is not Claude-routable: {reviewer!r}")
+    model, effort = config
+    safe_id = _safe_review_path_id(brief_id)
+    command = (
+        f"mkdir -p /tmp/_reviews/{safe_id}; "
+        f"python3 /home/paulsportsza/dispatch/claude_review.py "
+        f"--brief-id {shlex.quote(brief_id)} "
+        f"--model {model} "
+        f"--effort {effort} "
+        f"--review-mode {review_mode} "
+        f"--diff-base origin/main "
+        f"--diff-head HEAD "
+        f"--output-path /tmp/_reviews/{safe_id}/$(git rev-parse --short=12 HEAD)-claude-review.md"
+    )
+    return (
+        "SO #45 REVIEW GATE (Claude reviewer subprocess): after commit + push, "
+        f"before mark_done.sh, run `{command}`. "
+        "Embed the wrapper output verbatim under `## Cross-Model Review` in the "
+        "completion report. If it exits 1, address findings and rerun; if it "
+        "exits 2, report the gate error and do not mark done."
+    )
+
+
+def _codex_review_gate_instruction(dispatch_file: str) -> str:
+    return (
+        "SO #45 REVIEW GATE (pure-codex mode, LOCKED 6 May 2026): after commit + push, "
+        "before mark_done.sh, run a fresh inline Codex sub-agent review with "
+        "`DIFF=$(git show --stat --patch HEAD); codex --profile xhigh exec "
+        "\"You are an INDEPENDENT reviewer with NO prior context. Examine the diff below. "
+        "Brief: <BRIEF-ID>. Diff: ${DIFF}. Review for race conditions, auth gaps, "
+        "data-loss windows, migration rollback safety, logic errors, contract violations, "
+        "missed shared-behavior callers, gate coverage. Output exactly: "
+        "## Codex Sub-Agent Review; Outcome: clean | blockers-addressed | needs-changes; "
+        "Findings: [P0|P1|P2|P3] file:line — description, or none.\"`. "
+        "Embed the sub-agent stdout verbatim under `## Codex Sub-Agent Review` in the "
+        "completion report. HYBRID-MODE CAVEAT (`DISPATCH_MODE=hybrid`, Claude "
+        "executor only): `/codex:review --wait` remains canonical there; in "
+        "pure-codex use only the inline `codex --profile xhigh exec` pattern above."
+    )
+
+
+def _review_gate_instruction(
+    brief_id: str,
+    dispatch_file: str,
+    brief_data: dict[str, Any],
+) -> str:
+    mechanism = _route_field(brief_data, "mechanism").lower()
+    reviewer = _route_field(brief_data, "reviewer")
+    if mechanism == "subprocess" and _claude_reviewer_config(reviewer):
+        return _claude_review_gate_instruction(
+            brief_id,
+            reviewer=reviewer,
+            review_mode=_normalise_review_gate_mode(_route_field(brief_data, "review_mode")),
+        )
+    return _codex_review_gate_instruction(dispatch_file)
+
+
 class SpawnProtocol(Protocol):
     async def run(
         self,
@@ -248,8 +881,9 @@ class MultiStepSpawn:
         cmux: Any,
     ) -> None:
         agent = brief_data.get("agent", "")
-        # _model_flags raises on empty/unknown — no silent Sonnet default.
-        claude_cmd = _claude_cmd(agent)
+        meta = _brief_execution_meta_from_data(brief_data)
+        # _agent_cmd raises on empty/unknown in hybrid mode — no silent Sonnet default.
+        claude_cmd = _claude_cmd(agent, meta)
         dispatch_block = _build_dispatch_block(brief_data)
         brief_id = str(brief_data.get("brief_id", "UNKNOWN"))
 
@@ -378,6 +1012,7 @@ class MultiStepSpawn:
         # Single-line = no premature Enter submission, no chunking issues,
         # no escape sequence guessing. The dispatch block is on disk; claude
         # reads it as its first action.
+        review_gate = _review_gate_instruction(brief_id, dispatch_file, brief_data)
         single_line_kickoff = (
             f"Read {dispatch_file} and execute the brief described therein. "
             f"This file contains the canonical dispatch block (BRIEF-ID, Notion URL, "
@@ -393,19 +1028,7 @@ class MultiStepSpawn:
             f"fixture/harness/framework refactor. Shared-behavior changes (util/contract/function "
             f"used by ≥3 callers) need an extra-review 'Shared-behavior:' block in the AC even if "
             f"only 1 file actually changes. "
-            f"SO #45 REVIEW GATE (pure-codex mode, LOCKED 6 May 2026): after commit + push, "
-            f"before mark_done.sh, run a fresh inline Codex sub-agent review with "
-            f"`DIFF=$(git show --stat --patch HEAD); codex --profile xhigh exec "
-            f"\"You are an INDEPENDENT reviewer with NO prior context. Examine the diff below. "
-            f"Brief: <BRIEF-ID>. Diff: ${{DIFF}}. Review for race conditions, auth gaps, "
-            f"data-loss windows, migration rollback safety, logic errors, contract violations, "
-            f"missed shared-behavior callers, gate coverage. Output exactly: "
-            f"## Codex Sub-Agent Review; Outcome: clean | blockers-addressed | needs-changes; "
-            f"Findings: [P0|P1|P2|P3] file:line — description, or none.\"`. "
-            f"Embed the sub-agent stdout verbatim under `## Codex Sub-Agent Review` in the "
-            f"completion report. HYBRID-MODE CAVEAT (`DISPATCH_MODE=hybrid`, Claude "
-            f"executor only): `/codex:review --wait` remains canonical there; in "
-            f"pure-codex use only the inline `codex --profile xhigh exec` pattern above. "
+            f"{review_gate} "
             f"PRE-FLIGHT ESCAPE VALVE — if the brief crosses >3 production files AND lacks both "
             f"per-file snippets AND a Pre-flight token, do NOT stop and idle. Instead, dispatch a "
             f"fresh independent codex sub-agent for Pre-flight review BEFORE doing any file edits: "
@@ -505,10 +1128,11 @@ class InlineSpawn:
         cmux: Any,
     ) -> None:
         agent = brief_data.get("agent", "")
-        # _model_flags raises on empty/unknown — no silent Sonnet default.
-        model_part = " ".join(_model_flags(agent))
+        meta = _brief_execution_meta_from_data(brief_data)
+        # _agent_cmd raises on empty/unknown in hybrid mode — no silent Sonnet default.
+        model_part = _agent_cmd(agent, meta)
         block = _build_dispatch_block(brief_data).replace("'", "'\\''")
-        cmd = f"mosh {self.server} -- claude {model_part} --trust --prompt '{block}'"
+        cmd = f"mosh {self.server} -- {model_part} --trust --prompt '{block}'"
         cmux.surface_send_text(surface_id, cmd)
         cmux.surface_send_key(surface_id, "enter")
 
