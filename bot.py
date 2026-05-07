@@ -30956,16 +30956,24 @@ def _count_warm_narratives() -> int:
                 if _v2_cache_filter
                 else (_PREGEN_WARM_WINDOW_HOURS,)
             )
+            # FIX-PREGEN-VERDICT-FRESHNESS-PROBE-01: under V2, verdict-only rows
+            # (narrative_html='', verdict_html populated) are warm for pregen.
+            _html_filter = (
+                "AND verdict_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(verdict_html, ''))) > 0 "
+                if _v2_cache_filter
+                else "AND narrative_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
+            )
             row = conn.execute(
                 "SELECT COUNT(*) FROM narrative_cache "
                 "WHERE created_at > datetime('now', '-' || ? || ' hours') "
                 "AND narrative_source IS NOT NULL "
-                + _engine_filter +
-                "AND (status IS NULL OR status != 'quarantined') "
+                + _engine_filter
+                + _html_filter
+                + "AND (status IS NULL OR status != 'quarantined') "
                 "AND COALESCE(quarantined, 0) = 0 "
-                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape')) "
-                "AND narrative_html IS NOT NULL "
-                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
+                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape'))",
                 _params,
             ).fetchone()
             return int(row[0]) if row else 0
@@ -30996,16 +31004,24 @@ def _count_uncached_hot_tips(match_keys: list[str]) -> int:
             _params = tuple(match_keys) + (
                 (_VERDICT_V2_CACHE_ENGINE_VERSION,) if _v2_cache_filter else ()
             )
+            # FIX-PREGEN-VERDICT-FRESHNESS-PROBE-01: under V2, verdict-only rows
+            # (narrative_html='', verdict_html populated) are warm for pregen.
+            _html_filter = (
+                "AND verdict_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(verdict_html, ''))) > 0 "
+                if _v2_cache_filter
+                else "AND narrative_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
+            )
             rows = conn.execute(
                 "SELECT match_id FROM narrative_cache "
                 f"WHERE match_id IN ({placeholders}) "
                 "AND expires_at > CURRENT_TIMESTAMP "
-                + _engine_filter +
-                "AND (status IS NULL OR status != 'quarantined') "
+                + _engine_filter
+                + _html_filter
+                + "AND (status IS NULL OR status != 'quarantined') "
                 "AND COALESCE(quarantined, 0) = 0 "
-                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape')) "
-                "AND narrative_html IS NOT NULL "
-                "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
+                "AND (quality_status IS NULL OR quality_status NOT IN ('quarantined', 'skipped_banned_shape'))",
                 _params,
             ).fetchall()
             cached = {row[0] for row in rows}
