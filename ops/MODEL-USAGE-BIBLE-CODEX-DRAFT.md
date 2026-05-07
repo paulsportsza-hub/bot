@@ -1,3 +1,5 @@
+> **STATUS: SUPERSEDED 6 May 2026 PM.** Draft input retained for evidence. Canonical: `ops/MODEL-USAGE-BIBLE.md`.
+
 # MzansiEdge Model Usage Bible - Codex Evidence Draft
 
 Brief: `INV-MODEL-USAGE-BIBLE-CODEX-PERSPECTIVE-01`
