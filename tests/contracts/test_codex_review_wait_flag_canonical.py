@@ -11,11 +11,20 @@ import pathlib
 _REPO_ROOT = pathlib.Path(__file__).parents[2]  # bot/
 _COWORK_ROOT = pathlib.Path("/home/paulsportsza")
 
+_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _DEV_STANDARDS = _REPO_ROOT / "ops" / "DEV-STANDARDS.md"
+_MODEL_USAGE_BIBLE_CODEX_DRAFT = _REPO_ROOT / "ops" / "MODEL-USAGE-BIBLE-CODEX-DRAFT.md"
+_MODEL_USAGE_BIBLE_OPUS_DRAFT = _REPO_ROOT / "ops" / "MODEL-USAGE-BIBLE-OPUS-DRAFT.md"
 _SERVER_SPAWN_SEQUENCE = _COWORK_ROOT / "dispatch" / "cmux_bridge" / "spawn_sequence.py"
 _BOT_MIRROR_SPAWN_SEQUENCE = (
     _REPO_ROOT / "infra" / "dispatch" / "bridge" / "spawn_sequence.py"
 )
+_PURE_CODEX_REVIEW_DOCS = [
+    _CLAUDE_MD,
+    _DEV_STANDARDS,
+    _MODEL_USAGE_BIBLE_CODEX_DRAFT,
+    _MODEL_USAGE_BIBLE_OPUS_DRAFT,
+]
 _SPAWN_SEQUENCE_SURFACES = [
     _SERVER_SPAWN_SEQUENCE,
     _BOT_MIRROR_SPAWN_SEQUENCE,
@@ -44,6 +53,14 @@ def test_dev_standards_limits_wait_slash_to_hybrid_mode():
 
     assert inline_idx < hybrid_idx
     assert wait_idx > hybrid_idx
+
+
+def test_pure_codex_docs_do_not_reference_unsupported_quiet_flag():
+    for path in _PURE_CODEX_REVIEW_DOCS:
+        text = path.read_text(encoding="utf-8")
+        assert "codex --profile xhigh exec" in text
+        assert "codex exec --quiet" not in text
+        assert "codex --profile xhigh exec --quiet" not in text
 
 
 def test_spawn_sequence_review_gate_present_on_available_surfaces():

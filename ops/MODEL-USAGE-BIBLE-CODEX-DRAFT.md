@@ -102,7 +102,7 @@ Demonstrably weak:
 Observed cost/latency:
 
 - Codex direct execution smoke passed on 2026-05-01. `[Pipeline: INV-CODEX-CUTOVER-SMOKE-01, 2026-05-01, Medium - AUDITOR, Complete]`
-- Direct `codex exec --quiet` is the canonical fresh-process review pattern under pure-codex to avoid plugin/background hangs. `[Local: ops/DEV-STANDARDS.md, Pure-Codex Sub-Agent Review]`
+- Direct `codex --profile xhigh exec` is the canonical fresh-process review pattern under pure-codex to avoid plugin/background hangs. `[Local: ops/DEV-STANDARDS.md, Pure-Codex Sub-Agent Review]`
 - Codex reviewer cost is acceptable on standard reviews but can become large under adversarial loops; documented caps occurred on pregen and bridge reviews. `[Pipeline: FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01, 2026-05-04]` `[Pipeline: FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01, 2026-05-04]`
 
 Confidence: MEDIUM-HIGH. Codex has fewer Pipeline executor rows because it was retired, but review evidence is dense and high-signal.

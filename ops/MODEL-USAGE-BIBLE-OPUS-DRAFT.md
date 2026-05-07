@@ -730,9 +730,9 @@ Reviewer rotation:
 - Opus Max Effort executor -> Codex XHigh reviewer.
 
 Review mechanisms:
-- `codex exec --quiet` for Codex reviewing Claude output.
-- Use the server-supported equivalent (`codex exec -p xhigh` on current CLI) when
-  `--quiet` is unavailable; the review helper owns this CLI compatibility.
+- `codex --profile xhigh exec` for Codex reviewing Claude output.
+- Use the server-supported canonical form above; the current CLI does not
+  support `--quiet`.
 - Claude subprocess/API reviewer for Claude reviewing Codex output, or Cowork
   review queue when the judgement context exceeds a diff.
 - Hybrid selection: code-touching bounded briefs use subprocess/API review;
