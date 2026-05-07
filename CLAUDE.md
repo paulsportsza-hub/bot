@@ -64,7 +64,7 @@
 
 ## ⛔ STANDING ORDERS (universal — every session, every agent)
 
-*Post-split 17 April 2026 PM (CLAUDE-MD-SO-SPLIT-01 Tier 1). SO #38 added 19 Apr 2026. SO #40 added 22 Apr 2026. SO #41 added 25 Apr 2026. SO #52 added 7 May 2026. The 16 orders below apply to EVERY Cowork session (AUDITOR / LEAD / COO) and every dispatched agent, unconditionally. Original SO numbers preserved — gaps are intentional; the 25 moved orders live in target modules (see table at the end of this section). Re-read before every response.*
+*Post-split 17 April 2026 PM (CLAUDE-MD-SO-SPLIT-01 Tier 1). SO #38 added 19 Apr 2026. SO #40 added 22 Apr 2026. SO #41 added 25 Apr 2026. SO #52 added 7 May 2026. The 21 orders below apply to EVERY Cowork session (AUDITOR / LEAD / COO) and every dispatched agent, unconditionally. Original SO numbers preserved — gaps are intentional; the 25 moved orders live in target modules (see table at the end of this section). Re-read before every response.*
 
 1. **[SO #1]** Fix root causes, not symptoms. Trace every bug back to WHY it happened. No band-aids.
 2. **[SO #2]** Notion is the only operational memory. No critical context lives in chat history, worker memory, Make/n8n logic, or ad hoc notes.
