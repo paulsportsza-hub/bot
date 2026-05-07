@@ -12,8 +12,8 @@
 
 | Metric | Count |
 |---|---|
-| Total SOs in catalog | 33 |
-| ACTIVE | 32 |
+| Total SOs in catalog | 34 |
+| ACTIVE | 33 |
 | CANDIDATE (pending audit landing) | 1 |
 | SUPERSEDED | 0 (history note: SO #44 v1 "Codex 5.5 only executor" superseded by SO #44 Routing v1 binding rule, same number reused) |
 | RETIRED | 0 |
@@ -104,3 +104,23 @@ Cross-reference scan: every `[SO #N]` and `SO #N` reference across `bot/CLAUDE.m
 A canonical Notion mirror of this catalog lives under MzansiEdge Project Wiki — link recorded in the FIX-DOC-SO-CATALOG-CANONICAL-01 report. On any future SO change, server canonical (this file) is the source; Notion mirror updates from it.
 
 *Authored 5 May 2026 by AUDITOR Lane B (Information Architecture). Brief: FIX-DOC-SO-CATALOG-CANONICAL-01. Closes adversarial-audit findings R1 (RED), A2 (AMBER), A3 (AMBER).*
+
+
+---
+
+## SO #50 — Canonical Card Glow (LOCKED 7 May 2026)
+
+| Field | Value |
+|---|---|
+| Status | ACTIVE |
+| Source | `ops/CANONICAL-GLOW-SPEC.md` (authoritative) · `ops/TECHNICAL.md` §"Canonical Card Glow (LOCKED 7 May 2026)" (mirror) |
+| Lock date | 7 May 2026 |
+| Authority | Paul direct approval after TWO regression cycles (2 May right-side variant + 7 May header-clipped variant) |
+| Bound contract tests | `tests/contracts/test_match_detail_canonical.py` (6 assertions) + `tests/contracts/test_edge_detail_canonical.py` (6 assertions) |
+| Bound briefs | DOCS-GLOW-CANONICAL-LOCK-01 (this lock) · FIX-EDGE-CARD-GLOW-OVERFLOW-RESTORE-01 (`f059fa7`) · c04650b FIX-GLOW-COVERAGE-01 (working baseline) |
+| Working pattern | `.upper-section` / `.upper-glow-zone` wrapper with `overflow: hidden`; `.header { overflow: visible }`; glow divs as direct children of the wrapper; anchor `at 50% 45%`; per-tier classes `.logo-glow-{diamond\|gold\|silver\|bronze}`; heights 260px / 220px |
+| Forbidden patterns | `at 50% 25%` (top-center) on edge cards · `at 92% 50%` (right-side) · `.header { overflow: hidden }` · `_glow` Jinja adapter variable |
+| Affected templates | `card_templates/match_detail.html` · `card_templates/edge_detail.html` |
+| Carve-out | Sub_plans-pattern templates (`sub_plans.html`, `profile_home.html`, `my_matches.html`, `onboarding_*.html`) use a SEPARATE canonical: `.header` itself contains the glow with `overflow: hidden` because their layout is single-zone. Do not cross-pollinate. |
+
+**Standing rule:** any brief touching glow CSS on `match_detail.html` or `edge_detail.html` MUST (a) read `ops/CANONICAL-GLOW-SPEC.md` before editing, (b) run both contract tests after editing AND before committing, (c) include a Codex sub-agent review for any deviation from the locked pattern (visual regressions are user-facing and Paul-approval-required).

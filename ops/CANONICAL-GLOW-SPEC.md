@@ -1,7 +1,11 @@
 # Canonical Card Glow Spec
 
-**Locked:** 7 May 2026 (re-locked) | **Brief:** FIX-EDGE-CARD-GLOW-OVERFLOW-RESTORE-01
+**Locked:** 7 May 2026 (re-locked) | **Brief:** FIX-EDGE-CARD-GLOW-OVERFLOW-RESTORE-01 + DOCS-GLOW-CANONICAL-LOCK-01
 **Authority:** Paul direct approval after the second glow regression. Restores the c04650b WORKING pattern.
+
+**Contract tests (run before committing any glow CSS change):**
+- `tests/contracts/test_match_detail_canonical.py` — 6 assertions on match_detail
+- `tests/contracts/test_edge_detail_canonical.py` — 6 assertions on edge_detail
 
 > ONE pattern. The wrapper is `.upper-section`. The glow flows from header through matchup through meta-bar.
 > DO NOT introduce a `header { overflow: hidden }` containment around the glow — it clips.

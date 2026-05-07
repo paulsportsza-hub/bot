@@ -21,7 +21,20 @@ TEMPLATE = REPO_ROOT / "card_templates" / "match_detail.html"
 
 
 def _template_text() -> str:
-    return TEMPLATE.read_text(encoding="utf-8")
+    return _strip_top_comment(TEMPLATE.read_text(encoding="utf-8"))
+
+def _strip_top_comment(text: str) -> str:
+    """Strip the leading <!-- CANONICAL CARD GLOW — LOCKED ... --> comment.
+    The lock comment intentionally contains rejected patterns ("at 50% 25%",
+    "overflow: hidden") as documented examples. Tests must scope assertions
+    to live CSS, not the lock-stamp comment.
+    """
+    if text.startswith("<!--"):
+        end = text.find("-->")
+        if end != -1:
+            text = text[end + 3:].lstrip()
+    return text
+
 
 
 def test_match_detail_uses_upper_section_wrapper():

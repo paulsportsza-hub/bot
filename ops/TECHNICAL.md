@@ -156,6 +156,26 @@ Bronze users see WHAT they could win but not HOW. 4 access levels: full, partial
 
 794+ tests (719 contract + 59 snapshot + 16 edge accuracy, as of 4 Apr). 5-layer testing schema in `testing/TESTING-SCHEMA.md`. Launch gate: zero L2/L3 failures for 7 consecutive days.
 
-## Canonical Card Glow
+## Canonical Card Glow (LOCKED 7 May 2026)
 
-See [`ops/CANONICAL-GLOW-SPEC.md`](CANONICAL-GLOW-SPEC.md). Locked pattern: top-center `at 50% 25%`, per-tier colours, sub_plans-aligned. Do not introduce variants without Paul approval + new brief.
+**Authoritative spec:** [`ops/CANONICAL-GLOW-SPEC.md`](CANONICAL-GLOW-SPEC.md)
+
+**Locked pattern:** the c04650b `FIX-GLOW-COVERAGE-01` working version. Glow flows from header through matchup into the meta-bar, contained by a wrapper element (`.upper-section` on `match_detail.html`, `.upper-glow-zone` on `edge_detail.html`).
+
+**Critical rules — these caused TWO documented regressions when violated:**
+
+- ✅ Wrapper element (`.upper-section` or `.upper-glow-zone`) has `overflow: hidden` + `isolation: isolate` + `position: relative`
+- ✅ Glow divs are direct children of the WRAPPER, NOT of `.header`
+- ✅ `.header` has `overflow: visible` (or unset) — NEVER `overflow: hidden` (clips the glow inside the header strip — caused the 7 May 2026 regression)
+- ✅ `.header` background is transparent — NO opaque linear-gradient (would paint over the glow)
+- ✅ `.matchup` and `.meta-bar` have `position: relative; z-index: 1` so their content renders above the glow
+- ✅ Per-tier classes `.logo-glow-{diamond|gold|silver|bronze}` — NEVER collapse to a single `{{ tier_color }}` Jinja variable
+- ✅ Anchor: `at 50% 45%` (vertical midpoint of upper-section). Heights: 260px base, 220px screen.
+- ❌ NEVER `at 50% 25%` (top-center) on edge cards — works in `sub_plans.html` because that file's `.header` IS the entire upper region; geometry differs. Caused the 7 May regression.
+- ❌ NEVER `at 92% 50%` (right-side) — caused the 2 May regression. Paul has explicitly rejected this twice.
+
+**Two regression cycles in 5 days. Do not regress again.**
+
+Any brief touching card template glow CSS MUST read `CANONICAL-GLOW-SPEC.md` AND run `tests/contracts/test_match_detail_canonical.py` BEFORE committing.
+
+Sub_plans-pattern templates (`sub_plans.html`, `profile_home.html`, `my_matches.html`, `onboarding_*.html`) use a SEPARATE canonical: `.header` itself contains the glow with `overflow: hidden` because their layout is single-zone. Do not cross-pollinate the two patterns.
