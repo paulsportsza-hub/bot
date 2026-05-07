@@ -435,12 +435,12 @@ def audit_database(db_path: str) -> dict[str, int]:
             lower = verdict.lower()
             if "gets the nod" in lower:
                 gets_the_nod_count += 1
-            if "lean " in lower:
+            if "small lean to" in lower:
+                small_lean_to_count += 1
+            elif "lean " in lower:
                 lean_count += 1
             if "is the play" in lower:
                 is_the_play_count += 1
-            if "small lean to" in lower:
-                small_lean_to_count += 1
             if any(term in lower for term in SIGNAL_REGISTER_TERMS):
                 signal_register_count += 1
             current_odds_hash = _compute_current_odds_hash(conn, row.match_id)
