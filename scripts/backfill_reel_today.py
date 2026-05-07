@@ -50,7 +50,7 @@ from reel_generator import (  # type: ignore[import]
     _pick_id,
     _resolve_pick_team,
     _parse_teams_from_match_key,
-    query_top_picks,
+    _select_top_tier_pick,
     abbr,
 )
 
@@ -90,14 +90,11 @@ def _existing_ig_row_for_today(today: str) -> dict | None:
     return None
 
 
-def _select_pick(picks: dict) -> tuple[str, dict] | None:
-    for tier in TIERS:
-        if tier in picks:
-            return tier, picks[tier]
-    return None
-
-
 def main() -> int:
+    if "--dry-run" in sys.argv:
+        log.info("[BACKFILL] --dry-run: import OK, exiting.")
+        return 0
+
     today = _today_sast_iso()
     log.info("[BACKFILL] Target date = %s (SAST)", today)
 
@@ -116,12 +113,7 @@ def main() -> int:
                  today, existing.get("id"))
         return 0
 
-    picks = query_top_picks()
-    if not picks:
-        log.error("[BACKFILL] No unsettled edges in edge_results. Abort.")
-        return 3
-
-    selection = _select_pick(picks)
+    selection = _select_top_tier_pick(today)
     if selection is None:
         log.error("[BACKFILL] No pick available across tiers %s. Abort.", TIERS)
         return 3
