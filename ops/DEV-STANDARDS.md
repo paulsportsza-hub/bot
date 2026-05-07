@@ -253,6 +253,8 @@ grep -rn 'telethon_session' *.py scripts/ tests/ | grep -v 'save_telethon_sessio
 ```
 Note: the pre-merge gate does not currently auto-reject bare `telethon_session` references — authoring discipline is the enforcement layer.
 
+**`TELETHON_SESSION` env override rule:** nine harnesses accept a `TELETHON_SESSION` env var override. If you set this, it MUST point to `data/telethon_qa_session` (or a separate QA session). Never set `TELETHON_SESSION=data/telethon_session` — that re-routes QA traffic to Paul's personal account.
+
 ---
 
 ### Card QA OCR Block — mandatory in every card-touching brief (SO #38, LOCKED 22 Apr 2026)
