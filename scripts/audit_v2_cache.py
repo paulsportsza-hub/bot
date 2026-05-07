@@ -58,10 +58,11 @@ METRIC_LABELS = (
 # Ellis, etc.) and matching is case-insensitive — so leaked venue copy can't
 # slip past the hard-zero audit gate by case alone.
 VENUE_TOKENS = (
-    # Generic markers
+    # Generic markers — Stadium is specific enough; bare "Park" / "Bowl"
+    # would false-positive on soccer "park the bus" / cricket "bowl first"
+    # (Codex P2 round-2). Compound venue names below cover the actual
+    # ground-name leakage path.
     "Stadium",
-    "Park",
-    "Bowl",
     # EPL famous grounds
     "Old Trafford",
     "Etihad",
@@ -71,7 +72,7 @@ VENUE_TOKENS = (
     "St James' Park",
     "Goodison",
     "Selhurst",
-    "Tottenham Hotspur Stadium",
+    "Tottenham Hotspur",
     # Foreign clubs
     "Camp Nou",
     "Bernabéu",
@@ -81,12 +82,12 @@ VENUE_TOKENS = (
     "Signal Iduna",
     "San Siro",
     # SA PSL grounds
-    "FNB",
-    "Loftus",
+    "FNB Stadium",
+    "Loftus Versfeld",
     "Orlando Stadium",
     "Mbombela",
     "Moses Mabhida",
-    "Athlone",
+    "Athlone Stadium",
     "Dr. Petrus Molemela",
     # IPL grounds
     "Wankhede",
