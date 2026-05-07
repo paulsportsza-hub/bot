@@ -1,0 +1,75 @@
+# deploy-on-main.yml — CI gate that triggers a production deploy on every
+# push to main.
+#
+# Brief: FIX-BOT-RUNTIME-WORKTREE-ISOLATION-01.
+#
+# The deploy itself runs on the box (not in a GitHub-hosted runner) — this
+# workflow SSHes in and invokes scripts/deploy_bot_prod.sh with the pushed
+# SHA. SSH credentials live in GitHub Actions secrets:
+#   secrets.PROD_HOST          (e.g. 37.27.179.53)
+#   secrets.PROD_USER          (paulsportsza)
+#   secrets.PROD_SSH_KEY       (private key for the deploy user)
+#
+# Failure modes covered by the deploy script itself:
+#   - SHA not on origin/main → exit 2
+#   - bot.py AST parse failure → exit 3
+#   - service did not emit "Startup Truth" within DEPLOY_STARTUP_TIMEOUT → exit 4 (auto-rollback fires)
+#
+# This workflow simply surfaces those exits in CI.
+
+name: deploy-on-main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "SHA to deploy (defaults to push SHA)"
+        required: false
+
+concurrency:
+  group: deploy-on-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve target SHA
+        id: sha
+        run: |
+          SHA="${{ github.event.inputs.sha || github.sha }}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploying SHA: $SHA"
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
+
+      - name: Add prod host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Invoke deploy_bot_prod.sh
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          # Always invoke the script from the DEV tree (writable, mutable
+          # source of truth). bot-prod/ is read-only; running its copy of
+          # the script would create a bootstrap problem when the script
+          # itself is changed.
+          ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" \
+            "bash /home/paulsportsza/bot/scripts/deploy_bot_prod.sh $SHA"
+
+      - name: Report deploy outcome
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "::notice::Deploy succeeded — bot-prod is at ${{ steps.sha.outputs.sha }}"
+          else
+            echo "::error::Deploy failed — auto-rollback triggered. Inspect journalctl -u mzansi-bot on prod host."
+          fi
