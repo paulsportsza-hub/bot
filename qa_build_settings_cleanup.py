@@ -26,7 +26,7 @@ from telethon.tl.types import (
 # Config
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
-SESSION_PATH = "/home/paulsportsza/bot/data/telethon_session"
+SESSION_PATH = "/home/paulsportsza/bot/data/telethon_qa_session"
 BOT_USERNAME = "@mzansiedge_bot"
 SCREENSHOTS_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
 SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -39,7 +39,7 @@ from telethon.tl.types import (
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-STRING_SESSION_FILE = str(_bot_dir / "data" / "telethon_session.string")
+STRING_SESSION_FILE = str(_bot_dir / "data" / "telethon_qa_session.string")
 
 WAIT_MID = 8.0
 WAIT_LONG = 15.0

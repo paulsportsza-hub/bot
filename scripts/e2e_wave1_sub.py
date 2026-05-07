@@ -27,8 +27,8 @@ BOT_USERNAME = "mzansiedge_bot"
 SCREENSHOTS_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
 SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_session")
-STRING_FILE  = Path(__file__).parent.parent / "data" / "telethon_session.string"
+SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_qa_session")
+STRING_FILE  = Path(__file__).parent.parent / "data" / "telethon_qa_session.string"
 
 TIMEOUT = 18  # seconds
 

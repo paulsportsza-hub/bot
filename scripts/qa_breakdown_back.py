@@ -18,7 +18,7 @@ from telethon.tl.types import (
 
 load_dotenv("/home/paulsportsza/bot/.env")
 
-SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session.string"
+SESSION_FILE = "/home/paulsportsza/bot/data/telethon_qa_session.string"
 with open(SESSION_FILE) as f:
     session_str = f.read().strip()
 

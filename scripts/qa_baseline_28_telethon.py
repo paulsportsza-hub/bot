@@ -33,8 +33,8 @@ from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
-STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_session.string"
-FILE_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_session"
+STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string"
+FILE_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session"
 
 OUTPUT_FILE = Path(__file__).resolve().parent.parent.parent / "reports" / "qa-baseline-28-telethon-captures.json"
 OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)

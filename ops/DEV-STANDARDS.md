@@ -230,6 +230,24 @@ Dispatcher tooling guidance: every dispatched brief MUST include the Codex Revie
 
 ---
 
+### Telethon QA Session — MANDATORY for all harness scripts (OPS-QA-DEDICATED-ACCOUNT-01, LOCKED 7 May 2026)
+
+All Telethon QA harnesses MUST use `telethon_qa_session` (the dedicated QA test account). Never use `telethon_session` (Paul's personal account) in any test or harness script.
+
+**Session files:**
+- `data/telethon_qa_session` — file-based session for the QA account (used by all harnesses)
+- `data/telethon_qa_session.string` — string-based session for the QA account
+- `data/telethon_session` — Paul's personal session. **NEVER use in test code.**
+
+**Setup (one-time, requires QA phone number from Paul):**
+1. Paul creates a separate Telegram account (dedicated phone number).
+2. That account sends `/start` to @mzansiedge_bot to register.
+3. Run `python save_telethon_qa_session.py` interactively to authenticate and write `data/telethon_qa_session.string`.
+
+**Authoring rule:** any new QA harness script must import from `data/telethon_qa_session` / `data/telethon_qa_session.string`. PRs that reference `telethon_session` (bare, non-qa) in harness files are non-compliant and must be corrected before merge.
+
+---
+
 ### Card QA OCR Block — mandatory in every card-touching brief (SO #38, LOCKED 22 Apr 2026)
 
 Any brief that touches card rendering MUST embed the following block verbatim in its QA sub-agent instructions. The Telethon sub-agent runs this immediately after capturing the screenshot. Results go into the agent report as a table.

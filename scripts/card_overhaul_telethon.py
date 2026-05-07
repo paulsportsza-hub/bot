@@ -22,7 +22,7 @@ from telethon.tl.custom import Message
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-SESSION = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session")
+SESSION = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session")
 BOT = "@mzansiedge_bot"
 REPORT_DIR = "/home/paulsportsza/reports/e2e-screenshots"
 

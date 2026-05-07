@@ -13,7 +13,7 @@ load_dotenv("/home/paulsportsza/bot/.env")
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-STRING_SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session.string"
+STRING_SESSION_FILE = "/home/paulsportsza/bot/data/telethon_qa_session.string"
 BOT = "mzansiedge_bot"
 
 

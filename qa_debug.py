@@ -8,7 +8,7 @@ from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
-SESSION_PATH = "/home/paulsportsza/bot/data/telethon_session"
+SESSION_PATH = "/home/paulsportsza/bot/data/telethon_qa_session"
 BOT = "@mzansiedge_bot"
 
 

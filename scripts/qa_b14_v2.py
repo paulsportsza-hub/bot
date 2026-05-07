@@ -31,8 +31,8 @@ from telethon.tl.types import (
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT = "mzansiedge_bot"
-SESS = Path(__file__).resolve().parent.parent / "data" / "telethon_session.string"
-FSESS = Path(__file__).resolve().parent.parent / "data" / "telethon_session"
+SESS = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string"
+FSESS = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session"
 OUT = Path("/home/paulsportsza/reports/qa-baseline-14")
 OUT.mkdir(parents=True, exist_ok=True)
 TS = datetime.now().strftime("%Y%m%d-%H%M")

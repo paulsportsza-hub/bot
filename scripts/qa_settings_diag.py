@@ -31,8 +31,8 @@ API_ID   = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
 
-STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_session.string"
-FILE_SESSION        = Path(__file__).resolve().parent.parent / "data" / "telethon_session"
+STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string"
+FILE_SESSION        = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session"
 
 SETTINGS_LABEL = "⚙️ Settings"
 WAIT_SECS = 8
@@ -75,7 +75,7 @@ def describe_markup(markup) -> str:
 async def main() -> None:
     client = await get_client()
     if not await client.is_user_authorized():
-        print("ERROR: Telethon session not authorised. Run save_telethon_session.py first.")
+        print("ERROR: Telethon session not authorised. Run save_telethon_qa_session.py first.")
         await client.disconnect()
         return
 

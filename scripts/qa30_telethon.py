@@ -25,8 +25,8 @@ from telethon.tl.types import (
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
-STRING_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_session.string"
-FILE_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_session"
+STRING_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string"
+FILE_SESSION = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session"
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "reports" / "qa30-captures"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
