@@ -255,6 +255,20 @@ def test_failure_corpus_aligned_post_fix(
             if len(t) >= 4 and t.lower() not in _noise
         }
 
+    # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01: identity_label may
+    # legitimately render the lead with a curated nickname ("the Reds" for
+    # Liverpool). Treat each team's nickname as an equally-valid identity
+    # reference for the alignment check — the safety net is the cross-team
+    # leak guard below, which keeps the original "wrong-team" failure mode
+    # detectable.
+    from narrative_spec import lookup_nickname as _lookup_nickname
+    def _identity_tokens(label: str) -> set[str]:
+        toks = _meaningful_tokens(label)
+        nick = _lookup_nickname(label)
+        if nick:
+            toks |= _meaningful_tokens(nick)
+        return toks
+
     def _recommendation_phrase(text: str, odds_str: str) -> str:
         """Extract substring from start of verdict up to and including the
         bookmaker mention adjacent to the recommended odds.
@@ -296,10 +310,14 @@ def test_failure_corpus_aligned_post_fix(
         f"for {match_key}: {verdict}"
     )
 
-    pick_tokens = _meaningful_tokens(outcome_label)
-    other_tokens = _meaningful_tokens(other_team)
-    pick_tokens -= other_tokens
-    other_tokens -= _meaningful_tokens(outcome_label)
+    pick_tokens = _identity_tokens(outcome_label)
+    other_tokens = _identity_tokens(other_team)
+    # Cross-team disjunction: tokens shared between teams (rare, e.g. when
+    # one team's bare-name appears in the other's nickname) drop out of both
+    # sets so the cross-team leak check can't false-positive.
+    shared = pick_tokens & other_tokens
+    pick_tokens -= shared
+    other_tokens -= shared
 
     assert pick_tokens, (
         f"no meaningful tokens for outcome_label '{outcome_label}'; "

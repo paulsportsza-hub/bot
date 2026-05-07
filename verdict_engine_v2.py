@@ -11,6 +11,14 @@ def _single_mention_enabled() -> bool:
     return os.environ.get("V2_SINGLE_MENTION", "true").strip().lower() in ("true", "1", "yes", "on")
 
 
+def _body_reference_enabled() -> bool:
+    """FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 flag.
+    flag=1 (default): body uses Strategy α (nickname → coach surname's side → anaphor).
+    flag=0: revert to FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01 anaphor-only body.
+    """
+    return os.environ.get("V2_BODY_REFERENCE", "true").strip().lower() in ("true", "1", "yes", "on")
+
+
 @dataclass(frozen=True)
 class VerdictContext:
     match_key: str
@@ -255,6 +263,20 @@ KNOWN_TEAM_TOKENS = (
 POSITIVE_MOVEMENT = {"for", "toward", "towards", "favourable", "favorable", "shortening", "steam"}
 NEGATIVE_MOVEMENT = {"against", "away", "drift", "drifting", "negative", "unfavourable", "unfavorable"}
 
+# FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 (Strategy α floor):
+# Anaphor pool used when neither nickname nor coach is available. Each phrase
+# acts as a noun-phrase substitute for the recommended team in body fact_clauses
+# (e.g., "form gives the lean extra weight"). Stable_pick rotated per fact_type
+# salt so multi-fact renders don't all land on the same anaphor.
+ANAPHOR_POOL = (
+    "the lean",
+    "the pick",
+    "the play",
+    "this side",
+    "this lean",
+    "the call",
+)
+
 
 def stable_pick(options: Sequence[str], *, key: str) -> str:
     if not options:
@@ -294,6 +316,58 @@ def identity_label(ctx: VerdictContext, *, salt: str) -> str:
     if not labels:
         return team
     return stable_pick(tuple(dict.fromkeys(labels)), key=f"{_base_key(ctx)}|identity_style|{salt}")
+
+
+def _coach_surname_possessive(coach: str) -> str:
+    """Strategy α coach phrase: 'Pep Guardiola' → "Guardiola's side";
+    'Sergio Ramos' → "Ramos' side"; 'Sir Alex Ferguson' → "Ferguson's side".
+
+    Surname = last whitespace-split token. Apostrophe-only when surname ends
+    in 's' (regardless of case), apostrophe-s otherwise.
+    """
+    cleaned = (coach or "").strip()
+    if not cleaned:
+        return ""
+    parts = cleaned.split()
+    surname = parts[-1] if parts else ""
+    if not surname:
+        return ""
+    if surname.lower().endswith("s"):
+        return f"{surname}' side"
+    return f"{surname}'s side"
+
+
+def _body_reference(
+    ctx: VerdictContext, *, salt: str, force_anaphor: bool = False
+) -> str:
+    """Strategy α priority chain for body slot-fill.
+
+    Order: nickname (e.g. 'the Magpies') → coach surname's side ('Guardiola's
+    side') → anaphor pool ('the lean', 'the pick', ...).
+
+    force_anaphor=True is used by the identity_lead shape when identity_label
+    already fired with a nickname or coach phrase — avoids double-mention.
+    Salt rotates the anaphor pool across fact_types within a render.
+    """
+    if not force_anaphor:
+        nickname = _clean(ctx.nickname)
+        if nickname:
+            return nickname
+        coach_phrase = _coach_surname_possessive(_clean(ctx.coach))
+        if coach_phrase:
+            return coach_phrase
+    return stable_pick(ANAPHOR_POOL, key=f"{_base_key(ctx)}|body_anaphor|{salt}")
+
+
+def _identity_used_alias(identity: str, ctx: VerdictContext) -> bool:
+    """Detect whether identity_label() picked nickname/coach (vs bare team).
+
+    True when identity_label fired with a non-team alias — the body must then
+    fall through to anaphor to avoid a double-mention of nickname/coach.
+    """
+    if not identity:
+        return False
+    return identity.strip() != _clean(ctx.recommended_team)
 
 
 def validate_team_integrity(text: str, ctx: VerdictContext) -> list[str]:
@@ -486,14 +560,29 @@ def _render_candidate(
     else:
         action = _action_sentence(ctx, salt=f"{shape}|{primary_fact_type}|{attempt}")
         action_with_price = _action_with_price(ctx)
+
+    # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 Strategy α:
+    # compute identity first so we can detect alias-firing and force body to
+    # anaphor in the identity_lead shape (avoids double nickname/coach mention).
+    identity = identity_label(ctx, salt=f"{shape}|{attempt}")
+    body_ref = ""
+    if not body_name_team and _body_reference_enabled():
+        force_anaphor = (
+            shape == "identity_price_fact_action"
+            and _identity_used_alias(identity, ctx)
+        )
+        body_ref = _body_reference(
+            ctx, salt=primary_fact_type, force_anaphor=force_anaphor
+        )
+
     fact_clause = _render_fact_clause(
-        ctx, primary_fact_type, attempt=attempt, name_team=body_name_team
+        ctx, primary_fact_type, attempt=attempt,
+        name_team=body_name_team, body_ref=body_ref,
     )
     if not fact_clause:
         return None
 
     price_anchor = _price_anchor(ctx)
-    identity = identity_label(ctx, salt=f"{shape}|{attempt}")
     rendered: str | None
 
     # Single-mention close path: when V2_SINGLE_MENTION is on, fact_action +
@@ -523,7 +612,9 @@ def _render_candidate(
         rendered = f"{_capitalise(fact_clause)} — {em_dash_action}"
     elif shape == "price_fact_action":
         if primary_fact_type == "price_edge":
-            secondary = _secondary_fact_clause(ctx, attempt=attempt, name_team=body_name_team)
+            secondary = _secondary_fact_clause(
+                ctx, attempt=attempt, name_team=body_name_team, body_ref=body_ref
+            )
             if not secondary:
                 return None
             rendered = f"{_capitalise(fact_clause)} and {secondary} — {em_dash_action}"
@@ -531,7 +622,8 @@ def _render_candidate(
             if not signal_available(ctx, "price_edge"):
                 return None
             price_clause = _render_fact_clause(
-                ctx, "price_edge", attempt=attempt, name_team=body_name_team
+                ctx, "price_edge", attempt=attempt,
+                name_team=body_name_team, body_ref=body_ref,
             )
             if not price_clause:
                 return None
@@ -545,6 +637,7 @@ def _render_candidate(
         primary_fact_type=primary_fact_type,
         attempt=attempt,
         body_name_team=body_name_team,
+        body_ref=body_ref,
         is_team_outcome=is_team_outcome,
     )
 
@@ -556,6 +649,7 @@ def _fit_candidate(
     primary_fact_type: str,
     attempt: int,
     body_name_team: bool = True,
+    body_ref: str = "",
     is_team_outcome: bool = True,
 ) -> str | None:
     if len(text) <= 200:
@@ -576,8 +670,11 @@ def _fit_candidate(
         action = _action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
     else:
         action = _market_action_sentence(ctx, salt=f"compact|{primary_fact_type}|{attempt}")
+    # body_ref carries Strategy α reference (nickname / coach / anaphor) — same
+    # as the long path so compact rendering stays consistent.
     fact_clause = _render_fact_clause(
-        ctx, primary_fact_type, attempt=attempt, name_team=body_name_team
+        ctx, primary_fact_type, attempt=attempt,
+        name_team=body_name_team, body_ref=body_ref,
     )
     if not fact_clause:
         return None
@@ -593,134 +690,160 @@ def _render_fact_clause(
     *,
     attempt: int,
     name_team: bool = True,
+    body_ref: str = "",
 ) -> str | None:
     """Render a fact clause for the given fact_type.
 
-    name_team=True (legacy default) slot-fills the recommended team into the clause.
-    name_team=False (Approach C body) returns a team-less variant using anaphor —
-    the close sentence carries the only team mention.
+    name_team=True (legacy default) slot-fills ctx.recommended_team into the clause.
+    name_team=False + body_ref="" (FIX-V2-VERDICT-SINGLE-MENTION-RESTRUCTURE-01
+    Approach C) returns a team-less variant — the close carries the only mention.
+    name_team=False + body_ref="<phrase>" (FIX-V2-VERDICT-NICKNAME-COACH-BODY-
+    AND-VENUE-DROP-01 Strategy α) slots <phrase> into the same position {team}
+    would occupy. body_ref is typically a nickname ("the Magpies"), coach phrase
+    ("Guardiola's side"), or anaphor ("the lean") — all noun phrases that read
+    cleanly in 'for X' / 'gives X' patterns.
     """
+    # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 Phase 4: venue
+    # references retired ("Stadiums must be taken out. They just don't feel
+    # right at all." — Paul 2026-05-07). Reject the fact_type unconditionally
+    # so the rotation in render_verdict_v2 falls through to the next primary.
+    # FACT_PRIORITY + _available_fact_types intentionally keep venue_reference
+    # in the candidate list so the rotation modulo is byte-stable with the
+    # pre-fix engine — protecting test_card_verdict_alignment from drift.
+    if fact_type == "venue_reference":
+        return None
+
     key = f"{_base_key(ctx)}|{fact_type}|{attempt}"
     team = _clean(ctx.recommended_team)
     venue = _clean(ctx.venue)
     direction = _movement_direction(ctx)
+    # Slot resolution: legacy slot=team, body slot=body_ref (may be empty for
+    # C+D anaphor-less). Empty slot triggers the no-name return path.
+    slot = team if name_team else body_ref
 
     if fact_type == "price_edge":
         clauses = _eligible_price_clauses(ctx)
         if not clauses:
             return None
         base = stable_pick(clauses, key=f"{key}|price_clause")
-        if not name_team:
+        if not slot:
             return base
         if "market" in base:
-            return f"{base} for {team}"
+            return f"{base} for {slot}"
         if base.startswith("the number"):
-            return f"{base} on {team}"
+            return f"{base} on {slot}"
         if base.startswith("the quote"):
-            return f"{base} on {team}"
-        return f"{base} for {team}"
+            return f"{base} on {slot}"
+        return f"{base} for {slot}"
 
     if fact_type == "form_h2h":
         base = stable_pick(FORM_CLAUSES, key=f"{key}|form_clause")
-        if not name_team:
+        if not slot:
             return base
         if base == "recent results back the lean":
-            return f"recent results back {team}"
+            return f"recent results back {slot}"
         if base == "form gives this extra weight":
-            return f"form gives {team} extra weight"
+            return f"form gives {slot} extra weight"
         if base == "the form read supports the price":
-            return f"the form read supports {team}"
+            return f"the form read supports {slot}"
         if base == "recent form points the right way":
-            return f"recent form points toward {team}"
+            return f"recent form points toward {slot}"
         if base == "the results profile gives this support":
-            return f"the results profile gives {team} support"
+            return f"the results profile gives {slot} support"
         if base == "form adds a useful push":
-            return f"form adds a useful push for {team}"
+            return f"form adds a useful push for {slot}"
         if base == "recent results strengthen the case":
-            return f"recent results strengthen the case for {team}"
-        return f"the form angle is doing real work for {team}"
+            return f"recent results strengthen the case for {slot}"
+        return f"the form angle is doing real work for {slot}"
 
     if fact_type == "lineup_injury":
         base = stable_pick(INJURY_CLAUSES, key=f"{key}|injury_clause")
-        if not name_team:
+        if not slot:
             return base
         if base == "team news has not been fully priced in":
-            return f"team news has not been fully priced in for {team}"
+            return f"team news has not been fully priced in for {slot}"
         if base == "the team-news angle adds weight":
-            return f"the team-news angle adds weight for {team}"
+            return f"the team-news angle adds weight for {slot}"
         if base == "availability tilts this our way":
-            return f"availability tilts this toward {team}"
+            return f"availability tilts this toward {slot}"
         if base == "the injury read supports the price":
-            return f"the injury read supports {team}"
+            return f"the injury read supports {slot}"
         if base == "team news keeps the value alive":
-            return f"team news keeps the value alive for {team}"
-        return f"availability gives {team} extra appeal"
+            return f"team news keeps the value alive for {slot}"
+        return f"availability gives {slot} extra appeal"
 
     if fact_type == "movement":
         if direction == "for":
             base = stable_pick(MOVEMENT_FOR_CLAUSES, key=f"{key}|movement_clause")
-            if not name_team:
+            if not slot:
                 return base
             if base.endswith("our way"):
-                return f"the line is starting to move toward {team}"
+                return f"the line is starting to move toward {slot}"
             if base.endswith("the pick"):
-                return f"market movement is following {team}"
-            return f"{base} for {team}"
+                return f"market movement is following {slot}"
+            return f"{base} for {slot}"
         if direction == "against":
             base = stable_pick(MOVEMENT_AGAINST_CLAUSES, key=f"{key}|movement_clause")
-            if not name_team:
+            if not slot:
                 return base
-            return f"{base} on {team}"
+            return f"{base} on {slot}"
         base = stable_pick(MOVEMENT_UNKNOWN_CLAUSES, key=f"{key}|movement_clause")
-        if not name_team:
+        if not slot:
             return base
-        return f"{base} for {team}"
+        return f"{base} for {slot}"
 
     if fact_type == "market_agreement":
         base = stable_pick(MARKET_CLAUSES, key=f"{key}|market_clause")
         count = ctx.bookmaker_count or _mapping_int(_signal_value(ctx, "market_agreement"), "bookmaker_count")
-        if not name_team:
+        if not slot:
             if count and count >= 3:
                 return f"{count} books line up the same way"
             return base
         if count and count >= 3:
-            return f"{count} books give {team} support"
+            return f"{count} books give {slot} support"
         if base == "bookmaker breadth backs the lean":
-            return f"bookmaker breadth backs {team}"
+            return f"bookmaker breadth backs {slot}"
         if base == "the broader board supports the price":
-            return f"the broader board supports {team}"
-        return f"{base} for {team}"
+            return f"the broader board supports {slot}"
+        return f"{base} for {slot}"
 
     if fact_type == "tipster":
         base = stable_pick(TIPSTER_CLAUSES, key=f"{key}|tipster_clause")
-        if not name_team:
+        if not slot:
             return base
         if base == "outside support lines up here":
-            return f"outside support lines up behind {team}"
+            return f"outside support lines up behind {slot}"
         if base == "external reads back this side":
-            return f"external reads back {team}"
-        return f"{base} for {team}"
+            return f"external reads back {slot}"
+        return f"{base} for {slot}"
 
+    # DEPRECATED: venue_reference render kept as one-line revert per Phase 4
+    # decision — the early return at the top of the function blocks this branch
+    # from firing in production, but reinstating venue copy is a single-line
+    # delete of that early return. _ = venue silences unused-local lint.
+    _ = venue
     if fact_type == "venue_reference" and venue:
         base = stable_pick(VENUE_CLAUSES, key=f"{key}|venue_clause")
         rendered = base.format(venue=venue)
-        if not name_team:
+        if not slot:
             return rendered
         if team in rendered:
             return rendered
-        return f"{rendered} for {team}"
+        return f"{rendered} for {slot}"
 
     return None
 
 
 def _secondary_fact_clause(
-    ctx: VerdictContext, *, attempt: int, name_team: bool = True
+    ctx: VerdictContext, *, attempt: int, name_team: bool = True, body_ref: str = ""
 ) -> str | None:
     candidates = [fact for fact in _available_fact_types(ctx) if fact != "price_edge"]
     if not candidates:
         return None
     for fact in _rotated(candidates, key=f"{_base_key(ctx)}|secondary_fact_type|{attempt}"):
-        clause = _render_fact_clause(ctx, fact, attempt=attempt, name_team=name_team)
+        clause = _render_fact_clause(
+            ctx, fact, attempt=attempt, name_team=name_team, body_ref=body_ref
+        )
         if clause:
             return clause
     return None

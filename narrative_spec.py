@@ -1540,6 +1540,12 @@ class NarrativeSpec:
     away_story_type: str
     home_coach: str | None = None
     away_coach: str | None = None
+    # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 (Strategy α):
+    # Canonical nickname for the recommended team ("the Reds", "the Magpies"),
+    # populated by build_narrative_spec via lookup_nickname(). Empty when the
+    # team is unmapped or the bet is a market outcome (draw / BTTS / O-U).
+    # verdict_engine_v2._body_reference reads this to fire the α priority chain.
+    nickname: str = ""
     home_position: int | None = None
     away_position: int | None = None
     home_points: int | None = None
@@ -2336,6 +2342,12 @@ def build_narrative_spec(
         outcome=edge_data.get("outcome", ""),
         outcome_label=_build_outcome_label(edge_data, home_name, away_name),
         recommended_team=_build_recommended_team(edge_data, home_name, away_name),
+        # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01: feed Strategy α.
+        # lookup_nickname returns "" for market outcomes / unmapped teams; the
+        # verdict engine treats empty as "no nickname" and falls through to coach.
+        nickname=lookup_nickname(
+            _build_recommended_team(edge_data, home_name, away_name)
+        ),
         bet_type_is_team_outcome=_is_team_outcome_bet(edge_data),
         bookmaker=edge_data.get("best_bookmaker", ""),
         odds=edge_data.get("best_odds", 0),

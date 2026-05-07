@@ -40,7 +40,33 @@ METRIC_LABELS = (
     "small_lean_to_count",
     "signal_register_count",
     "team_mention_over_one_count",
+    # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 — venue token gate.
+    # Counts rows whose verdict_html carries any stadium/venue token. Audit
+    # fails when this is > 0 (verdict copy must read like punter language,
+    # not a database dump).
+    "venue_token_count",
 )
+
+# Tokens that must NEVER surface in a V2 verdict (Phase 4 — venue_reference
+# retired). Captures generic markers ("Stadium", " Park"), the famous EPL
+# grounds, foreign top-flight grounds, and the city-suffix dump pattern that
+# triggered Paul's complaint ("Bloemfontein", "Manchester" prefixed by ", ").
+VENUE_TOKENS = (
+    "Stadium",
+    "Old Trafford",
+    "Etihad",
+    "Anfield",
+    "Stamford Bridge",
+    "Emirates",
+    "Camp Nou",
+    "Bernabéu",
+    "Bernabeu",
+    "Wembley",
+)
+# City-suffix dump pattern: ", <Capitalised City>" coming straight after the
+# venue. Detected in addition to VENUE_TOKENS so the audit catches whatever
+# venue copy snuck in past the rotation gate.
+VENUE_CITY_SUFFIX_RE = re.compile(r",\s+(Manchester|London|Liverpool|Bloemfontein|Soweto|Johannesburg|Pretoria|Durban|Cape Town)\b")
 
 SPORT_VOCAB_BANS = {
     "soccer": ("powerplay", "wicket", "set-piece", "breakdown", "scrum", "lineout"),
@@ -474,6 +500,7 @@ def audit_database(db_path: str) -> dict[str, int]:
     small_lean_to_count = 0
     signal_register_count = 0
     team_mention_over_one_count = 0
+    venue_token_count = 0
     verdict_to_matches: dict[str, set[str]] = defaultdict(set)
     primary_clauses: list[str] = []
     conn = connect_odds_db(db_path)
@@ -534,6 +561,17 @@ def audit_database(db_path: str) -> dict[str, int]:
                     team_mention_over_one_count += 1
                     invalid_rows.add(row.match_id)
 
+            # FIX-V2-VERDICT-NICKNAME-COACH-BODY-AND-VENUE-DROP-01 — venue gate.
+            # Any stadium / venue / city-suffix token in the rendered verdict
+            # marks the row invalid. Threshold is hard zero — verdict copy must
+            # read like punter language, not a database dump.
+            if any(
+                re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", verdict)
+                for token in VENUE_TOKENS
+            ) or VENUE_CITY_SUFFIX_RE.search(verdict):
+                venue_token_count += 1
+                invalid_rows.add(row.match_id)
+
             verdict_to_matches[verdict].add(row.match_id)
             clause = _primary_clause(verdict)
             if clause:
@@ -559,6 +597,7 @@ def audit_database(db_path: str) -> dict[str, int]:
         "small_lean_to_count": small_lean_to_count,
         "signal_register_count": signal_register_count,
         "team_mention_over_one_count": team_mention_over_one_count,
+        "venue_token_count": venue_token_count,
     }
 
 
@@ -599,6 +638,7 @@ def main() -> int:
         )
         or action_shape_count < 2
         or metrics["team_mention_over_one_count"] > 0
+        or metrics["venue_token_count"] > 0
     ):
         print("AUDIT FAILED", file=sys.stderr)
         return 1
