@@ -79,6 +79,26 @@ class TestSchemaGuardRefuses:
         assert rc == 5
         assert os.path.isdir(prev), "bot-prod-prev must still exist — guard fired before any moves"
 
+    def test_corrupt_schema_version_fails_closed(self, tmp_path):
+        """P2 (Codex): non-numeric schema_version → guard refuses rollback rather than silently allowing."""
+        shared = os.path.join(str(tmp_path), "shared")
+        os.makedirs(shared, exist_ok=True)
+        with open(os.path.join(shared, "schema_version"), "w") as f:
+            f.write("corrupted")
+
+        prod = os.path.join(str(tmp_path), "bot-prod")
+        os.makedirs(prod, exist_ok=True)
+        _make_migration_dir(prod, [1])
+        prev = os.path.join(str(tmp_path), "bot-prod-prev")
+        os.makedirs(prev, exist_ok=True)
+        _make_migration_dir(prev, [1])
+
+        env = {**os.environ, "DEPLOY_PROD_TREE": prod, "DEPLOY_SHARED": shared, "DEPLOY_SKIP_RESTART": "1"}
+        result = subprocess.run(["bash", _script_path()], env=env, capture_output=True, text=True)
+        out = result.stdout + result.stderr
+        assert result.returncode == 5, f"Expected exit 5 (fail closed), got {result.returncode}.\n{out}"
+        assert "schema audit" in out.lower()
+
 
 class TestSchemaGuardAllows:
     def test_equal_schemas_proceed(self, tmp_path):

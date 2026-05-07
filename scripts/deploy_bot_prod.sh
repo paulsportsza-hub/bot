@@ -147,14 +147,13 @@ mv "$STAGING" "$PROD_TREE"
 log "applying chmod u-w to non-symlink contents of $PROD_TREE"
 find "$PROD_TREE" -not -type l -exec chmod u-w {} + 2>/dev/null || true
 
-# === 5.5. Record schema_version ===========================================
-# Capture the highest migration number from the deployed SHA so rollback.sh
-# can refuse a rollback to a target that expects a newer schema.
+# Pre-compute schema_version; recorded only after confirmed startup below
+# (or immediately when DEPLOY_SKIP_RESTART=1 skips the readiness gate).
 SCHEMA_VERSION=$(_schema_version_of "$PROD_TREE")
-printf '%s\n' "$SCHEMA_VERSION" > "$SHARED/schema_version"
-log "schema_version ${SCHEMA_VERSION} recorded to $SHARED/schema_version"
 
 if [ "${DEPLOY_SKIP_RESTART:-0}" = "1" ]; then
+    printf '%s\n' "$SCHEMA_VERSION" > "$SHARED/schema_version"
+    log "schema_version ${SCHEMA_VERSION} recorded to $SHARED/schema_version"
     log "DEPLOY_SKIP_RESTART=1 — leaving service alone"
     log "deploy ok (no restart): $TARGET_SHA"
     exit 0
@@ -218,5 +217,11 @@ if [ "$WAIT_RC" -ne 0 ]; then
     bash "$(dirname "$0")/deploy_bot_prod_rollback.sh" || true
     exit 4
 fi
+
+# Record schema_version only after startup is confirmed — prevents the shared
+# file from being advanced for a deploy that ultimately failed and was
+# auto-rolled-back (Codex sub-agent P1).
+printf '%s\n' "$SCHEMA_VERSION" > "$SHARED/schema_version"
+log "schema_version ${SCHEMA_VERSION} recorded to $SHARED/schema_version"
 
 log "deploy ok: $TARGET_SHA (active sha: $(git -C "$PROD_TREE" rev-parse --short HEAD 2>/dev/null || echo '?'))"

@@ -46,8 +46,13 @@ _schema_version_of() {
 # code against a schema that has been migrated forward beyond what it knows.
 if [ -f "$SHARED/schema_version" ]; then
     CURRENT_SCHEMA=$(tr -d '[:space:]' < "$SHARED/schema_version")
+    # Fail closed on a corrupt/empty schema_version — an unreadable guard is
+    # worse than a missing one (Codex sub-agent P2).
+    case "$CURRENT_SCHEMA" in
+        ''|*[!0-9]*) fail "SCHEMA GUARD: schema_version file is non-numeric ('${CURRENT_SCHEMA}'). Manual schema audit needed before rollback." 5 ;;
+    esac
     TARGET_SCHEMA=$(_schema_version_of "$PREV")
-    if [ "$TARGET_SCHEMA" -gt "$CURRENT_SCHEMA" ] 2>/dev/null; then
+    if [ "$TARGET_SCHEMA" -gt "$CURRENT_SCHEMA" ]; then
         fail "SCHEMA GUARD FIRED: rollback target expects schema v${TARGET_SCHEMA} but bot-data-shared records v${CURRENT_SCHEMA}. Manual schema audit needed before rollback." 5
     fi
     log "schema guard OK: rollback target schema=${TARGET_SCHEMA} current=${CURRENT_SCHEMA}"
