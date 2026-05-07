@@ -42,10 +42,12 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
         sub_payment_confirmed.html
         profile_home.html
         match_detail.html
+        guide_topic.html
     Rationale: list-like content varies in item count — dynamic height eliminates
     blank-space padding. ai_breakdown sections vary greatly in prose length.
     match_detail joined the adaptive match card family under
-    FIX-CARD-MATCH-CANONICAL-FAMILY-01.
+    FIX-CARD-MATCH-CANONICAL-FAMILY-01. guide_topic uses dynamic height because
+    guide topic prose varies by topic.
 
 Enforcement note: Validated by tests/contracts/test_card_dimensions.py.
 """

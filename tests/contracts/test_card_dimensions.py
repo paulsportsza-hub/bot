@@ -99,6 +99,8 @@ LIST_TEMPLATES = {
     "live_games_empty.html",
     # FIX-ZERO-TEXT-GUIDE-MENU-01
     "guide_menu.html",
+    # FIX-ZERO-TEXT-GUIDE-TOPICS-01
+    "guide_topic.html",
     # FIX-ZERO-TEXT-SUBSCRIBE-EDGE-CASES-01
     "sub_already_active.html",
     "sub_plan_invalid.html",

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 
+from jinja2 import Environment, FileSystemLoader
 import pytest
 
 import bot
@@ -16,6 +18,44 @@ import db
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_handle_guide_topic_uses_card_template():
+    """Guide topic callbacks must render image cards, not plain text."""
+    query = MagicMock()
+    query.message.chat_id = 12345
+
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card, \
+         patch("bot._serve_response", new_callable=AsyncMock) as mock_text:
+        await bot.handle_guide(query, "signals")
+
+    mock_text.assert_not_awaited()
+    mock_card.assert_awaited_once()
+    kwargs = mock_card.call_args.kwargs
+    assert kwargs["template"] == "guide_topic.html"
+    assert "Signals" in kwargs["data"]["title_html"]
+    assert "A price edge starts the case" in kwargs["data"]["body_html"]
+    buttons = [
+        button
+        for row in kwargs["markup"].inline_keyboard
+        for button in row
+    ]
+    assert any(button.callback_data == "guide:menu" for button in buttons)
+
+
+async def test_guide_topic_template_renders_topic_data():
+    topic_card = bot._build_guide_topic_data("edge_ratings")
+    assert topic_card is not None
+    data, _ = topic_card
+    template_dir = Path(__file__).parent.parent / "card_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
+
+    html = env.get_template("guide_topic.html").render(**data)
+
+    assert "GUIDE" in html
+    assert "Edge Ratings" in html
+    assert "The badge tells you how strong" in html
+    assert "Back to Guide" in html
 
 
 async def test_cmd_start_new_user(test_db, mock_update, mock_context):

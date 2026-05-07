@@ -1601,6 +1601,7 @@ GUIDE_TOPICS: list[tuple[str, str]] = [
     ("value101", "💰 Value Betting 101 — EV in simple terms"),
     ("bookmaker", "🏦 Bookmaker Quick Start — Place your first bet"),
 ]
+_GUIDE_TOPIC_KEYS = {topic_key for topic_key, _ in GUIDE_TOPICS}
 
 
 def kb_help(back_target: str = "menu:home") -> InlineKeyboardMarkup:
@@ -1779,6 +1780,25 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
         InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
     ])
     return text, InlineKeyboardMarkup(buttons)
+
+
+def _build_guide_topic_data(topic_key: str) -> tuple[dict, InlineKeyboardMarkup] | None:
+    """Return template data for a guide topic detail card."""
+    if topic_key not in _GUIDE_TOPIC_KEYS:
+        return None
+
+    text, markup = _build_guide_topic_surface(topic_key)
+    lines = [line.rstrip() for line in text.strip().splitlines()]
+    title_html = lines[0] if lines else "📖 <b>Guide</b>"
+    body_html = "\n".join(lines[1:]).strip()
+    data = {
+        "header_logo_b64": build_guide_menu_data().get("header_logo_b64", ""),
+        "title_html": title_html,
+        "body_html": body_html,
+        "back_label": "↩️ Back to Guide",
+        "text_fallback": text,
+    }
+    return data, markup
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4671,8 +4691,25 @@ async def handle_guide(query, action: str) -> None:
             message_to_edit=query.message,
         )
     else:
-        text, markup = _build_guide_topic_surface(action)
-        await _serve_response(query, text, markup)
+        topic_card = _build_guide_topic_data(action)
+        if topic_card is None:
+            _, markup = _build_guide_menu_surface()
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=query.message.chat_id,
+                template="guide_menu.html", data=build_guide_menu_data(),
+                text_fallback="📖 Guide\n\nPick a topic:",
+                markup=markup,
+                message_to_edit=query.message,
+            )
+            return
+        topic_data, markup = topic_card
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="guide_topic.html", data=topic_data,
+            text_fallback=topic_data["text_fallback"],
+            markup=markup,
+            message_to_edit=query.message,
+        )
 
 
 # ── Sport / odds handlers ────────────────────────────────
