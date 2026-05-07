@@ -11,7 +11,7 @@ load_dotenv()
 BOT = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 from config import BOT_ROOT
 RAW_PATH = BOT_ROOT.parent / "reports" / "REGFIX-QA-01-raw-captures.txt"
 

@@ -26,7 +26,7 @@ BOT_USERNAME = "mzansiedge_bot"
 
 # Read StringSession
 from config import DATA_DIR, BOT_ROOT
-SESSION_STR = open(str(DATA_DIR / "telethon_session.string")).read().strip()
+SESSION_STR = open(str(DATA_DIR / "telethon_qa_session.string")).read().strip()
 
 REPORT_DIR = str(BOT_ROOT.parent / "reports")
 TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M")

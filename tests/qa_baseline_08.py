@@ -31,8 +31,8 @@ from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = str(Path(__file__).resolve().parent.parent / "data" / "telethon_session")
-STRING_SESSION_FILE = str(Path(__file__).resolve().parent.parent / "data" / "telethon_session.string")
+SESSION_FILE = str(Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session")
+STRING_SESSION_FILE = str(Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string")
 
 TIMEOUT = 20
 SHORT_TIMEOUT = 10

@@ -27,7 +27,7 @@ from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback
 API_ID   = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 BOT_USERNAME = "mzansiedge_bot"
-STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
+STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session.string")
 
 TIPS_TIMEOUT   = 120   # seconds max for tips list
 DETAIL_TIMEOUT = 45    # seconds max for detail narrative

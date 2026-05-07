@@ -32,8 +32,8 @@ from telethon.tl.types import (
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_session.session"
-STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_session.string"
+SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.session"
+STRING_SESSION_FILE = Path(__file__).resolve().parent.parent / "data" / "telethon_qa_session.string"
 REPORT_PATH = Path("/home/paulsportsza/reports/my_matches_fix_captures.json")
 
 RESPONSE_TIMEOUT = 20  # seconds per callback wait

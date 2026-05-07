@@ -242,9 +242,16 @@ All Telethon QA harnesses MUST use `telethon_qa_session` (the dedicated QA test 
 **Setup (one-time, requires QA phone number from Paul):**
 1. Paul creates a separate Telegram account (dedicated phone number).
 2. That account sends `/start` to @mzansiedge_bot to register.
-3. Run `python save_telethon_qa_session.py` interactively to authenticate and write `data/telethon_qa_session.string`.
+3. Run `python save_telethon_qa_session.py` interactively to authenticate. Writes both `data/telethon_qa_session` (SQLite) and `data/telethon_qa_session.string` in one authentication step.
 
 **Authoring rule:** any new QA harness script must import from `data/telethon_qa_session` / `data/telethon_qa_session.string`. PRs that reference `telethon_session` (bare, non-qa) in harness files are non-compliant and must be corrected before merge.
+
+**Compliance check (run before every PR that touches tests/ or scripts/):**
+```bash
+grep -rn 'telethon_session' bot/*.py bot/scripts/ bot/tests/ | grep -v 'save_telethon_session.py' | grep -v '__pycache__' | grep -v 'telethon_qa_session'
+# Must return zero lines.
+```
+Note: the pre-merge gate does not currently auto-reject bare `telethon_session` references — authoring discipline is the enforcement layer.
 
 ---
 

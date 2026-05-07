@@ -16,7 +16,7 @@ from telethon.sessions import StringSession
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.environ.get("TELEGRAM_API_ID", "0"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 
 
 async def click_and_wait(client, msg, cb_data: str, timeout: int = 30):

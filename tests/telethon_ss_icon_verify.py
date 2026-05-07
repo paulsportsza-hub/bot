@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 BOT = "@mzansiedge_bot"
-SESSION = str(Path(__file__).parent.parent / "data" / "telethon_session.session")
+SESSION = str(Path(__file__).parent.parent / "data" / "telethon_qa_session.session")
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 OUT_DIR = Path("/tmp/ss_icon_verify")

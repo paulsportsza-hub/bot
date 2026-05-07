@@ -28,7 +28,7 @@ from telethon.tl.custom.message import Message
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.environ.get("TELEGRAM_API_ID", "0"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 REPORT_PATH = BOT_ROOT.parent / "reports" / "qa28-captures.json"
 REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
 

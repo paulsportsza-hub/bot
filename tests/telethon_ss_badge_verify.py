@@ -41,7 +41,7 @@ BOT_USERNAME = "mzansiedge_bot"
 
 # Session file: prefer the one in data/ that already exists
 _BOT_DIR   = Path(__file__).parent.parent
-SESSION    = str(_BOT_DIR / "data" / "telethon_session")     # .session file (no extension)
+SESSION    = str(_BOT_DIR / "data" / "telethon_qa_session")     # .session file (no extension)
 _ALT_SESS  = str(_BOT_DIR / "anon_session")                  # fallback
 
 # ── Telethon imports ─────────────────────────────────────────────────────────

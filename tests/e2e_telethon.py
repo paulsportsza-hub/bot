@@ -3,7 +3,7 @@
 Tests the LIVE bot by sending real messages and clicking inline buttons
 through the Telegram API. No browser required.
 
-Requires: data/telethon_session.string (saved Telethon session)
+Requires: data/telethon_qa_session.string (saved Telethon session)
 
 Usage:
     python tests/e2e_telethon.py                    # Run all tests
@@ -45,7 +45,7 @@ logger = logging.getLogger("e2e")
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 REPORT_PATH = Path("data/e2e_report.json")
 SUMMARY_PATH = Path("data/e2e_report_summary.md")
 
@@ -1363,7 +1363,7 @@ async def run_all_tests():
 
     if not SESSION_PATH.exists():
         logger.error("No Telethon session found at %s", SESSION_PATH)
-        logger.error("Run save_telethon_session.py first to authenticate.")
+        logger.error("Run save_telethon_qa_session.py first to authenticate.")
         sys.exit(1)
 
     session_str = SESSION_PATH.read_text().strip()
@@ -1371,7 +1371,7 @@ async def run_all_tests():
     await client.connect()
 
     if not await client.is_user_authorized():
-        logger.error("Session expired — re-run save_telethon_session.py")
+        logger.error("Session expired — re-run save_telethon_qa_session.py")
         sys.exit(1)
 
     me = await client.get_me()
@@ -1435,7 +1435,7 @@ async def run_specific_suite(suite_name: str):
     await client.connect()
 
     if not await client.is_user_authorized():
-        logger.error("Session expired — re-run save_telethon_session.py")
+        logger.error("Session expired — re-run save_telethon_qa_session.py")
         sys.exit(1)
 
     me = await client.get_me()

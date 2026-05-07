@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = os.path.expanduser("~/bot/data/telethon_session")
-STRING_SESSION_FILE = os.path.expanduser("~/bot/data/telethon_session.string")
+SESSION_FILE = os.path.expanduser("~/bot/data/telethon_qa_session")
+STRING_SESSION_FILE = os.path.expanduser("~/bot/data/telethon_qa_session.string")
 
 
 async def wait_for_bot_msg(client, bot_peer, after_id: int, timeout: float = 8.0):

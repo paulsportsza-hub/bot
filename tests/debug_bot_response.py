@@ -9,8 +9,8 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "mzansiedge_bot"
 
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STRING_SESSION_FILE = os.path.join(_BASE, "data", "telethon_session.string")
-SESSION_FILE = os.path.join(_BASE, "data", "telethon_session")
+STRING_SESSION_FILE = os.path.join(_BASE, "data", "telethon_qa_session.string")
+SESSION_FILE = os.path.join(_BASE, "data", "telethon_qa_session")
 
 async def get_client():
     if os.path.exists(STRING_SESSION_FILE):

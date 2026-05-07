@@ -13,7 +13,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto
 
-SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session.string"
+SESSION_FILE = "/home/paulsportsza/bot/data/telethon_qa_session.string"
 BOT_USERNAME = "mzansiedge_bot"
 WAIT = 30
 SCREENSHOTS_DIR = "/home/paulsportsza/reports/qa-tier-copy-01"

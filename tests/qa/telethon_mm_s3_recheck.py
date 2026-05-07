@@ -15,7 +15,7 @@ from telethon.sessions import StringSession
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session.string"
+SESSION_FILE = "/home/paulsportsza/bot/data/telethon_qa_session.string"
 EVIDENCE_DIR = "/home/paulsportsza/tests/evidence/mm_edge_bugfix_20260419"
 os.makedirs(EVIDENCE_DIR, exist_ok=True)
 

@@ -60,7 +60,7 @@ class PersonaRunner:
         self,
         persona_id: str,
         *,
-        session_path: str = "data/telethon_session.string",
+        session_path: str = "data/telethon_qa_session.string",
         bot_username: str = "mzansiedge_bot",
         api_id: int | None = None,
         api_hash: str | None = None,

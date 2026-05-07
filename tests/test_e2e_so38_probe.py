@@ -10,8 +10,8 @@ BOT_USERNAME = "mzansiedge_bot"
 
 CANDIDATES = [
     "/home/paulsportsza/bot/mzansi_qa",
-    "/home/paulsportsza/bot/telethon_session",
-    "/home/paulsportsza/bot/data/telethon_session",
+    "/home/paulsportsza/bot/telethon_qa_session",
+    "/home/paulsportsza/bot/data/telethon_qa_session",
     "/home/paulsportsza/bot/anon_session",
 ]
 

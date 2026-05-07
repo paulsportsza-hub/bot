@@ -23,8 +23,8 @@ from telethon.tl.types import (
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session")
-STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
+SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session")
+STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session.string")
 OUTPUT_FILE = "/home/paulsportsza/reports/target6-chelsea-manutd-capture.txt"
 
 TIMEOUT = 20  # seconds to wait for bot responses

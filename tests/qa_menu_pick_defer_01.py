@@ -20,8 +20,8 @@ from telethon.sessions import StringSession
 API_ID = int(os.environ.get("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 _DATA = Path(__file__).parent.parent / "data"
-SESSION_FILE = str(_DATA / "telethon_session")
-STRING_SESSION_FILE = _DATA / "telethon_session.string"
+SESSION_FILE = str(_DATA / "telethon_qa_session")
+STRING_SESSION_FILE = _DATA / "telethon_qa_session.string"
 BOT_USERNAME = "mzansiedge_bot"
 REPORT_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
 REPORT_DIR.mkdir(parents=True, exist_ok=True)

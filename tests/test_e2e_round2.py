@@ -35,7 +35,7 @@ BOT_USERNAME = "mzansiedge_bot"
 
 # Read string session from file
 from config import DATA_DIR, BOT_ROOT
-with open(str(DATA_DIR / "telethon_session.string"), "r") as f:
+with open(str(DATA_DIR / "telethon_qa_session.string"), "r") as f:
     SESSION_STR = f.read().strip()
 
 TIMEOUT = 20  # seconds to wait for bot response

@@ -19,7 +19,7 @@ API_ID = int(os.environ.get("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 STRING_SESSION_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "telethon_session.string"
+    "data", "telethon_qa_session.string"
 )
 BOT_USERNAME = "mzansiedge_bot"
 from config import BOT_ROOT

@@ -6,7 +6,7 @@ from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback
 
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
-SESSION_FILE = "data/telethon_session.string"
+SESSION_FILE = "data/telethon_qa_session.string"
 
 def all_btns(msg):
     out = []

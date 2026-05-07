@@ -43,7 +43,7 @@ log = logging.getLogger("phase0")
 BOT = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 
 SCREENSHOT_DIR = BOT_ROOT.parent / "reports" / "screenshots" / "phase0"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)

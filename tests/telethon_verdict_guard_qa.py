@@ -12,7 +12,7 @@ from telethon import TelegramClient
 
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
-SESSION = "/home/paulsportsza/bot/data/telethon_session"
+SESSION = "/home/paulsportsza/bot/data/telethon_qa_session"
 BOT = "@mzansiedge_bot"
 OUTPUT = "/home/paulsportsza/reports/telethon_FIX_REGRESS_D1.json"
 SS_DIR = "/home/paulsportsza/reports/screenshots_FIX_REGRESS_D1"

@@ -86,7 +86,7 @@ from telethon.tl.types import (  # noqa: E402
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-STRING_SESSION_FILE = BOT_DIR / "data" / "telethon_session.string"
+STRING_SESSION_FILE = BOT_DIR / "data" / "telethon_qa_session.string"
 ODDS_DB = Path("/home/paulsportsza/scrapers/odds.db")
 SS_DIR = Path("/home/paulsportsza/reports/e2e-screenshots/w91-p3-verdict-floor")
 SS_DIR.mkdir(parents=True, exist_ok=True)

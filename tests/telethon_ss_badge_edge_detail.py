@@ -34,7 +34,7 @@ API_ID   = int(_ENV.get("TELEGRAM_API_ID")  or "0")
 API_HASH =     _ENV.get("TELEGRAM_API_HASH") or ""
 BOT_USERNAME = "mzansiedge_bot"
 _BOT_DIR = Path(__file__).parent.parent
-SESSION  = str(_BOT_DIR / "data" / "telethon_session")
+SESSION  = str(_BOT_DIR / "data" / "telethon_qa_session")
 
 from telethon import TelegramClient
 from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback, MessageMediaPhoto

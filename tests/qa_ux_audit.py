@@ -31,8 +31,8 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "mzansiedge_bot"
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-STRING_SESSION_FILE = os.path.join(SESSION_DIR, "telethon_session.string")
-FILE_SESSION = os.path.join(SESSION_DIR, "telethon_session")
+STRING_SESSION_FILE = os.path.join(SESSION_DIR, "telethon_qa_session.string")
+FILE_SESSION = os.path.join(SESSION_DIR, "telethon_qa_session")
 
 WAIT_TIPS = 18
 WAIT_TEASER = 12

@@ -44,7 +44,7 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
 
-with open(os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session.string")) as f:
     SESSION_STR = f.read().strip()
 
 WAIT_SHORT = 4  # seconds for quick responses

@@ -1,7 +1,11 @@
-"""Save Telethon session string for the dedicated QA test account.
+"""Save Telethon session for the dedicated QA test account.
 
 Run this ONCE interactively after Paul creates the QA Telegram account.
 All QA harnesses will then use telethon_qa_session instead of Paul's personal session.
+
+Writes TWO session artifacts from a single authentication so both harness types work:
+  - data/telethon_qa_session         (SQLite file, used by harnesses that pass a path)
+  - data/telethon_qa_session.string  (used by harnesses that load StringSession)
 
 Usage:
     python save_telethon_qa_session.py
@@ -23,22 +27,29 @@ load_dotenv()
 
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_qa_session.string")
-SESSION_PATH.parent.mkdir(exist_ok=True)
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+STRING_SESSION_PATH = DATA_DIR / "telethon_qa_session.string"
+FILE_SESSION_PATH = str(DATA_DIR / "telethon_qa_session")
 
 
 async def main():
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    # Authenticate once using the file session path — Telethon creates the SQLite .session file.
+    # Then export a string copy so harnesses using StringSession also work.
+    client = TelegramClient(FILE_SESSION_PATH, API_ID, API_HASH)
     await client.start()
 
-    session_str = client.session.save()
-    SESSION_PATH.write_text(session_str)
-    print(f"\nQA session saved to {SESSION_PATH}")
-    print(f"Session string length: {len(session_str)}")
+    # Export to string session so string-session harnesses are covered.
+    session_str = StringSession.save(client.session)
+    STRING_SESSION_PATH.write_text(session_str)
 
     me = await client.get_me()
     print(f"Logged in as: {me.first_name} (@{me.username})")
-    print("\nAll QA harnesses will now authenticate as this account.")
+    print(f"File session:   {FILE_SESSION_PATH}.session")
+    print(f"String session: {STRING_SESSION_PATH} (len={len(session_str)})")
+    print("\nBoth session artifacts written. All QA harnesses are now authorised.")
     print("Paul's telethon_session is unchanged.")
 
     await client.disconnect()

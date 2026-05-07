@@ -21,7 +21,7 @@ from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-SESSION = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "telethon_session")
+SESSION = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "telethon_qa_session")
 BOT_USERNAME = "mzansiedge_bot"
 REPORT_PATH = "/home/paulsportsza/reports/verdict_coherence_captures.json"
 

@@ -43,7 +43,7 @@ except ImportError:
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-SESSION_FILE = str(_BOT_DIR / "data" / "telethon_session.string")
+SESSION_FILE = str(_BOT_DIR / "data" / "telethon_qa_session.string")
 ODDS_DB = "/home/paulsportsza/scrapers/odds.db"
 
 OUT_DIR = Path("/tmp/qa_fix_core7_soccer_01")

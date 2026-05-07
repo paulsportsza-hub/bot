@@ -31,7 +31,7 @@ from tests.qa.card_assertions import (
 
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
-STRING_SESSION_FILE = str(Path(__file__).parent.parent.parent / "data" / "telethon_session.string")
+STRING_SESSION_FILE = str(Path(__file__).parent.parent.parent / "data" / "telethon_qa_session.string")
 ALERTS_CHANNEL_ID = int(os.getenv("TELEGRAM_ALERTS_CHANNEL_ID", "-1003789410835"))
 
 EVIDENCE_DIR = Path("/home/paulsportsza/reports/evidence/build_pregen_window_verify_01")

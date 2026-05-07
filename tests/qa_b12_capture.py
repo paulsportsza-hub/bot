@@ -22,7 +22,7 @@ load_dotenv()
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 REPORT_DIR = Path("/home/paulsportsza/reports/qa-baseline-12")
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 

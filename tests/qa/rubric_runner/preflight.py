@@ -79,13 +79,13 @@ def check_db_files(result: PreflightResult) -> None:
             result.fail(f"PF-1/{label}", f"{path} not found")
 
 
-def check_telethon_session(result: PreflightResult) -> None:
+def check_telethon_qa_session(result: PreflightResult) -> None:
     """PF-2: Telethon session string file must exist."""
     path = _resolve(SESSION_PATH)
     if path.exists() and path.stat().st_size > 0:
-        result.ok("PF-2/telethon_session")
+        result.ok("PF-2/telethon_qa_session")
     else:
-        result.fail("PF-2/telethon_session", f"{path} missing or empty")
+        result.fail("PF-2/telethon_qa_session", f"{path} missing or empty")
 
 
 def check_stitch_mock(result: PreflightResult) -> None:
@@ -188,7 +188,7 @@ def run_preflight(*, skip_process_check: bool = False) -> PreflightResult:
     result = PreflightResult()
 
     check_db_files(result)
-    check_telethon_session(result)
+    check_telethon_qa_session(result)
     check_stitch_mock(result)
     check_ocr_key(result)
     check_output_dirs(result)

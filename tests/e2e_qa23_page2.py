@@ -9,7 +9,7 @@ from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback, Keyboar
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
-STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
+STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session.string")
 TIMEOUT = 15
 DETAIL_TIMEOUT = 25
 

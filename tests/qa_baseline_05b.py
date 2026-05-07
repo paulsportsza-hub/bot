@@ -34,7 +34,7 @@ log = logging.getLogger("qa_b05b")
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 OUTPUT_PATH = Path("/home/paulsportsza/reports/b05b_captures.json")
 
 BOT_REPLY_TIMEOUT = 20
@@ -157,7 +157,7 @@ def capture(msg, label=""):
 
 async def main():
     if not SESSION_PATH.exists():
-        log.error("No Telethon session at %s. Run save_telethon_session.py first.", SESSION_PATH)
+        log.error("No Telethon session at %s. Run save_telethon_qa_session.py first.", SESSION_PATH)
         sys.exit(1)
 
     session_str = SESSION_PATH.read_text().strip()

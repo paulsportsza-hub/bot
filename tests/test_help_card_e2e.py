@@ -39,8 +39,8 @@ TIMEOUT = 15  # seconds to wait for bot response
 
 # Session paths (prefer string session)
 _DIR = os.path.join(BOT_DIR, "data")
-STRING_SESSION_FILE = os.path.join(_DIR, "telethon_session.string")
-FILE_SESSION = os.path.join(_DIR, "telethon_session")
+STRING_SESSION_FILE = os.path.join(_DIR, "telethon_qa_session.string")
+FILE_SESSION = os.path.join(_DIR, "telethon_qa_session")
 
 
 # ── Telethon client helpers ───────────────────────────────────────────────────

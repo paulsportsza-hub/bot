@@ -12,7 +12,7 @@ from telethon.tl.types import KeyboardButtonCallback
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH")
 BOT = "@mzansiedge_bot"
-S_FILE = Path("/home/paulsportsza/bot/data/telethon_session.string")
+S_FILE = Path("/home/paulsportsza/bot/data/telethon_qa_session.string")
 
 
 async def main():

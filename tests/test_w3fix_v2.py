@@ -34,8 +34,8 @@ from telethon.tl.types import (
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_session")
-STRING_SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_session.string")
+SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_qa_session")
+STRING_SESSION_FILE = str(Path(__file__).parent.parent / "data" / "telethon_qa_session.string")
 REPORTS_DIR = Path("/home/paulsportsza/reports")
 TIMEOUT = 25
 BOT_ID = None  # set after connection

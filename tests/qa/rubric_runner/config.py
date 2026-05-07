@@ -25,7 +25,7 @@ BOT_REPLY_TIMEOUT: int = 45    # default wait for a bot response (cold-start can
 PICKS_TIMEOUT: int = 60        # wait for edge picks list (slower surface)
 
 # Telethon session (relative to bot/ CWD)
-SESSION_PATH: str = "data/telethon_session.string"
+SESSION_PATH: str = "data/telethon_qa_session.string"
 
 # Database paths (relative to bot/ CWD)
 ODDS_DB_PATH: str = "data/odds.db"

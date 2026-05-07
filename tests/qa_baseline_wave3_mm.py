@@ -11,7 +11,7 @@ from telethon.sessions import StringSession
 API_ID = int(os.getenv("TELEGRAM_API_ID","0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH","")
 BOT = "mzansiedge_bot"
-SF = ROOT/"data"/"telethon_session.string"
+SF = ROOT/"data"/"telethon_qa_session.string"
 OUT = Path("/tmp/qa_w3"); OUT.mkdir(parents=True, exist_ok=True)
 
 

@@ -33,11 +33,11 @@ def _load_session() -> TelegramClient:
     """Prefer file session that exists on disk."""
     candidates = [
         "/home/paulsportsza/bot/mzansi_qa.session",
-        "/home/paulsportsza/bot/telethon_session.session",
-        "/home/paulsportsza/bot/data/telethon_session.session",
+        "/home/paulsportsza/bot/telethon_qa_session.session",
+        "/home/paulsportsza/bot/data/telethon_qa_session.session",
         "/home/paulsportsza/bot/anon_session.session",
     ]
-    string_file = "/home/paulsportsza/bot/data/telethon_session.string"
+    string_file = "/home/paulsportsza/bot/data/telethon_qa_session.string"
     if os.path.exists(string_file):
         s = open(string_file).read().strip()
         if s:

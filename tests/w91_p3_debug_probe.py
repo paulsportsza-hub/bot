@@ -27,7 +27,7 @@ from telethon.tl.types import (  # noqa: E402
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-SESSION_STRING = (BOT_DIR / "data" / "telethon_session.string").read_text().strip()
+SESSION_STRING = (BOT_DIR / "data" / "telethon_qa_session.string").read_text().strip()
 
 
 def _describe_msg(m) -> dict:

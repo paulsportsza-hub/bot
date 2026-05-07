@@ -26,7 +26,7 @@ from telethon.sessions import StringSession
 API_ID   = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "@mzansiedge_bot"
-STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
+STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_qa_session.string")
 
 COLD_TIMEOUT = 40    # seconds — must respond within this for cold path
 WARM_TIMEOUT = 12    # seconds — warm path must be faster

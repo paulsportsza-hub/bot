@@ -38,7 +38,7 @@ log = logging.getLogger("wave12b")
 BOT = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 REPORT_DIR = BOT_ROOT.parent / "reports" / "e2e-screenshots"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_PATH = BOT_ROOT.parent / "reports" / "wave12b-e2e-results.json"
@@ -874,7 +874,7 @@ async def main():
     await client.connect()
 
     if not await client.is_user_authorized():
-        log.error("Session expired. Re-run save_telethon_session.py")
+        log.error("Session expired. Re-run save_telethon_qa_session.py")
         sys.exit(1)
 
     me = await client.get_me()

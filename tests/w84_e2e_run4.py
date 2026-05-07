@@ -8,7 +8,7 @@ from telethon import events
 
 API_ID = 32418601
 API_HASH = "95e313a8ef5b998be0515dd8328fac57"
-STRING_SESSION_FILE = "data/telethon_session.string"
+STRING_SESSION_FILE = "data/telethon_qa_session.string"
 RESULTS_FILE = f"/tmp/w84_e2e_run4_{int(time.time())}.json"
 
 def get_all_buttons(msg):

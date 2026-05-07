@@ -38,7 +38,7 @@ log = logging.getLogger("r18-qa")
 BOT_USERNAME = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_PATH = Path("data/telethon_session.string")
+SESSION_PATH = Path("data/telethon_qa_session.string")
 from config import BOT_ROOT
 RAW_CAPTURES_PATH = BOT_ROOT.parent / "reports" / "r18-qa-01-raw-captures.txt"
 REPORT_PATH = BOT_ROOT.parent / "reports" / "r18-qa-01-report.md"
