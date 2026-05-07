@@ -32813,20 +32813,36 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
             )
             raise SystemExit(1)
 
-        # Recorded holder is dead — attempt to reclaim the stale lock (AC-4).
-        log.warning("Reclaiming stale lockfile (recorded PID %s is dead).", existing)
+        # Recorded PID appears dead. Retry flock — the kernel lock is the only
+        # source of truth. Do NOT mutate the file until after the lock is granted;
+        # writing our PID before flock() would corrupt the file if the lock is
+        # still held by an inherited fd from a child of the dead process (AC-4).
+        log.warning("Recorded lockfile PID %s is dead — attempting reclaim.", existing)
         try:
-            os.ftruncate(fd, 0)
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, str(os.getpid()).encode())
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as reclaim_exc:
+        except BlockingIOError:
+            os.close(fd)
+            log.error(
+                "Cannot reclaim singleton lock (PID %s dead but lock still held). Exiting.",
+                existing,
+            )
+            raise SystemExit(1)
+        except OSError as reclaim_exc:
             os.close(fd)
             log.error(
                 "Failed to reclaim stale lockfile (recorded PID %s): %s. Exiting.",
                 existing,
                 reclaim_exc,
             )
+            raise SystemExit(1)
+        # Lock granted. Write our PID only now that we own the lock.
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode())
+        except OSError as write_exc:
+            os.close(fd)
+            log.error("Failed to write PID after stale-lock reclaim: %s. Exiting.", write_exc)
             raise SystemExit(1)
         _reclaimed = True
 
