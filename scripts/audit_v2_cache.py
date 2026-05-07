@@ -63,7 +63,10 @@ VENUE_TOKENS = (
     # (Codex P2 round-2). Compound venue names below cover the actual
     # ground-name leakage path.
     "Stadium",
-    # EPL famous grounds
+    # EPL famous grounds. "Tottenham Hotspur" / "Wembley" omitted bare —
+    # both collide with non-venue copy ("Tottenham Hotspur are vulnerable",
+    # "Wembley Way is busy"). Use "Tottenham Hotspur Stadium" /
+    # "Wembley Stadium" — Codex P2/P3 round-3 fix.
     "Old Trafford",
     "Etihad",
     "Anfield",
@@ -72,12 +75,12 @@ VENUE_TOKENS = (
     "St James' Park",
     "Goodison",
     "Selhurst",
-    "Tottenham Hotspur",
+    "Tottenham Hotspur Stadium",
     # Foreign clubs
     "Camp Nou",
     "Bernabéu",
     "Bernabeu",
-    "Wembley",
+    "Wembley Stadium",
     "Allianz Arena",
     "Signal Iduna",
     "San Siro",
