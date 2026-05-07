@@ -1,3 +1,25 @@
+<!--
+  ============================================================
+  CANONICAL CARD GLOW — LOCKED 7 May 2026
+  ============================================================
+  Authoritative spec: ops/CANONICAL-GLOW-SPEC.md
+  Working pattern: c04650b FIX-GLOW-COVERAGE-01 (4 May 2026)
+
+  Two regressions documented:
+  - 2 May 2026 (e7758fb): right-side `at 92% 50%` glow — REJECTED
+  - 7 May 2026 (3e675bf): top-center `at 50% 25%` inside `.header
+    { overflow: hidden }` — clipped, REJECTED
+
+  Critical rules:
+  - Glow divs live in the .upper-section / .upper-glow-zone wrapper,
+    NEVER inside .header
+  - .header MUST have overflow: visible (or unset)
+  - Anchor MUST be `at 50% 45%`, heights 260px / 220px
+  - Per-tier classes .logo-glow-{diamond|gold|silver|bronze}
+
+  Contract test: tests/contracts/test_match_detail_canonical.py
+  ============================================================
+-->
 <!DOCTYPE html>
 <html>
 <head>
