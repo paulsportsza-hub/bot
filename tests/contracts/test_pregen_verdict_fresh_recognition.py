@@ -65,6 +65,7 @@ def _insert_row(
     quarantined: int = 0,
     status: str | None = None,
     quality_status: str | None = None,
+    odds_hash: str = "",
 ) -> None:
     exp = (datetime.now(timezone.utc) + timedelta(hours=expires_offset_hours)).strftime(
         "%Y-%m-%d %H:%M:%S"
@@ -73,8 +74,8 @@ def _insert_row(
     conn.execute(
         "INSERT OR REPLACE INTO narrative_cache "
         "(match_id, narrative_html, expires_at, verdict_html, engine_version, "
-        "quarantined, status, quality_status, narrative_source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "quarantined, status, quality_status, narrative_source, odds_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             match_id,
             narrative_html,
@@ -85,6 +86,7 @@ def _insert_row(
             status,
             quality_status,
             engine_version or "w82",
+            odds_hash,
         ),
     )
     conn.commit()
@@ -302,4 +304,67 @@ def test_count_warm_narratives_counts_verdict_only_rows(tmp_path: Path) -> None:
     assert warm >= 3, (
         "_count_warm_narratives must count V2 verdict-only rows so the "
         "startup warmth check does not incorrectly trigger a pregen sweep"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — _verdict_only_odds_hash returns stored hash (P2 match path)
+# ---------------------------------------------------------------------------
+
+def test_verdict_only_odds_hash_returns_stored_hash(tmp_path: Path) -> None:
+    """_verdict_only_odds_hash returns the stored odds_hash for a v2_microfact row.
+
+    This is the prerequisite for the full-sweep hash-match skip: when the stored
+    hash equals the current computed hash, the gate skips regeneration.
+    """
+    db = _make_db(tmp_path)
+    _insert_row(
+        db,
+        "match_hash_1_2026-05-09",
+        narrative_html="",
+        verdict_html="<strong>Team X</strong> — Back at 2.10.",
+        engine_version="v2_microfact",
+        odds_hash="abc123deadbeef",
+    )
+
+    from scripts.pregenerate_narratives import _verdict_only_odds_hash
+
+    with patch("bot._NARRATIVE_DB_PATH", str(db)):
+        stored = _verdict_only_odds_hash("match_hash_1_2026-05-09")
+
+    assert stored == "abc123deadbeef", (
+        "_verdict_only_odds_hash must return the stored hash so the full-sweep "
+        "gate can compare against the current computed hash and skip on match"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — _verdict_only_odds_hash returns '' for empty hash (P2 drift path)
+# ---------------------------------------------------------------------------
+
+def test_verdict_only_odds_hash_returns_empty_for_missing_hash(tmp_path: Path) -> None:
+    """_verdict_only_odds_hash returns '' when odds_hash is empty — gate falls through to regen.
+
+    When the stored hash is empty (never written or odds drifted), the full-sweep
+    skip condition (_v_hash and _current_hash and _v_hash == _current_hash) evaluates
+    False and the row is queued for regeneration, not skipped.
+    """
+    db = _make_db(tmp_path)
+    _insert_row(
+        db,
+        "match_hash_2_2026-05-09",
+        narrative_html="",
+        verdict_html="<strong>Team Y</strong> — Lay at 2.80.",
+        engine_version="v2_microfact",
+        odds_hash="",
+    )
+
+    from scripts.pregenerate_narratives import _verdict_only_odds_hash
+
+    with patch("bot._NARRATIVE_DB_PATH", str(db)):
+        stored = _verdict_only_odds_hash("match_hash_2_2026-05-09")
+
+    assert stored == "", (
+        "_verdict_only_odds_hash must return '' when no valid hash is stored — "
+        "the full-sweep gate then falls through to regeneration (odds-drift path)"
     )
