@@ -180,6 +180,8 @@ class ReviewJob:
     diff_stat: str
     risk_tags: tuple[str, ...]
     review_mode: Literal["review", "adversarial-review"]
+    outcome: Literal["pending", "clean", "blockers-addressed", "needs-changes", "gate-error"] = "pending"
+    report_url: str | None = None
 
 @dataclass(frozen=True)
 class ReviewPlan:
@@ -334,6 +336,7 @@ class BriefMeta:
     risk_tags: tuple[str, ...] = ()
     review_mode: str = "review"
     declared_model_override: str | None = None
+    requires_review: bool = True
 ```
 
 ### TASK_SIGNATURES
@@ -467,7 +470,7 @@ At successful commit/push time:
 def after_push(meta: BriefMeta, head_sha: str) -> None:
     plan = read_review_plan(meta.brief_id)
     job = enqueue_review_job(meta, head_sha, plan)
-    wait_for_review(job, timeout=review_timeout(plan))
+    job = wait_for_review(job, timeout=review_timeout(plan))
     if job.outcome == "needs-changes":
         raise ReviewBlocked(job.report_url)
     if job.outcome == "gate-error" and meta.requires_review:
