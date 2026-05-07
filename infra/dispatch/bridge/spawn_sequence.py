@@ -365,11 +365,18 @@ def _brief_execution_meta_from_data(brief_data: dict[str, Any]) -> BriefExecutio
     raw_meta = brief_data.get("meta")
     meta_data = raw_meta if isinstance(raw_meta, dict) else {}
 
+    def has_value(value: Any) -> bool:
+        if value is None or value == "":
+            return False
+        if isinstance(value, (dict, list, tuple, set)) and not value:
+            return False
+        return True
+
     def pick(*keys: str, default: Any = "") -> Any:
         for source in (meta_data, brief_data):
             for key in keys:
                 value = source.get(key)
-                if value not in (None, ""):
+                if has_value(value):
                     return value
         return default
 

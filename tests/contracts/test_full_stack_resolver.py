@@ -191,6 +191,31 @@ def test_queue_nested_meta_drives_resolver_metadata() -> None:
     assert parsed.declared_model_override == "codex-high"
 
 
+def test_empty_nested_meta_does_not_erase_top_level_risk_tags() -> None:
+    parsed = _brief_execution_meta_from_data(
+        {
+            "brief_id": "FIX-SESSION-COOKIE-01",
+            "agent": "Sonnet - AUDITOR",
+            "klass": "FIX",
+            "target_repo": "bot",
+            "files_in_scope": ["session_manager.py"],
+            "risk_tags": ["auth"],
+            "title": "Session cookie hardening",
+            "meta": {
+                "files": [],
+                "risk_tags": [],
+            },
+        }
+    )
+
+    assert parsed.files == ("session_manager.py",)
+    assert parsed.risk_tags == ("auth",)
+    route = resolve_full_stack_route(parsed)
+    assert route.executor_cmd == ["codex", "--profile", "xhigh"]
+    assert route.reviewer == "opus-max"
+    assert route.review_mode == "adversarial"
+
+
 def test_full_stack_review_gate_uses_resolved_claude_reviewer() -> None:
     meta = _meta(
         "FIX-SO45-CODEX-INLINE-SUBAGENT-01",
