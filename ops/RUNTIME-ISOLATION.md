@@ -84,24 +84,6 @@ Atomic mv: prod → failed, prev → prod. Service restarts. Bot back on previou
    for `Startup Truth` to appear in `journalctl`. On regression the
    script invokes `deploy_bot_prod_rollback.sh` and exits non-zero.
 
-**Manual deploy (current):** run the script directly on the server:
-
-```bash
-bash /home/paulsportsza/bot/scripts/deploy_bot_prod.sh <SHA>
-```
-
-The script must always run from a writable location (the dev tree) to avoid a
-bootstrap problem when the script itself changes.
-
-**CI auto-deploy: DISABLED** (brief `OPS-CI-DEPLOY-ON-MAIN-DISABLE-01`, 2026-05-07).
-`.github/workflows/deploy-on-main.yml` was originally authored to SSH the prod
-host on every push to `main`, but the push trigger has been removed because three
-required secrets (`PROD_HOST`, `PROD_USER`, `PROD_SSH_KEY`) are not yet configured
-on `paulsportsza-hub/bot`. Re-enable AC: provision those secrets + ratify the
-invocation path (runner checkout vs `/home/paulsportsza/bot-prod/scripts/…`) in
-brief `OPS-CI-DEPLOY-ON-MAIN-RE-ENABLE-01`. `workflow_dispatch:` remains active for
-manual triggers from the GitHub Actions UI.
-
 ## Rollback flow
 
 `scripts/deploy_bot_prod_rollback.sh`:
