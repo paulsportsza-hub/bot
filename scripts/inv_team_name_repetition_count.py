@@ -4,9 +4,8 @@
 Reads narrative_cache rows for active V2-rendered edges, computes:
   1. Repetition distribution (1×, 2×, 3×, 4×+) of recommended_team in verdict_html.
   2. Per-row breakdown (match_id, sport, tier, bookmaker, odds, count, verdict).
-  3. Distribution by shape pattern detected (identity_lead vs fact_lead).
 
-Read-only. No production-code dependency beyond the engine module + db_connect.
+Read-only. No production-code dependency beyond db_connect.
 """
 from __future__ import annotations
 
